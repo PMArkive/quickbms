@@ -129,7 +129,7 @@ int lzfx_compress(const void *const ibuf, const unsigned int ilen,
     int lit;    /* # of bytes in current literal run */
 
 #if defined (WIN32) && defined (_M_X64)
-    unsigned _int64 off; /* workaround for missing POSIX compliance */
+    unsigned long long /*_int64*/ off; /* workaround for missing POSIX compliance */
 #else
     unsigned long off;
 #endif

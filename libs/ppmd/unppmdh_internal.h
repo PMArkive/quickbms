@@ -145,7 +145,7 @@ public:
 static struct SUBRANGE {
     DWORD LowCount, HighCount, scale;
 } SubRange;
-const DWORD TOP=1 << 24, BOT=1 << 15;
+static const DWORD TOP=1 << 24, BOT=1 << 15;
 static DWORD low, code, range;
 
 static void ariInitEncoder()
@@ -205,8 +205,8 @@ static void ariRemoveSubrange()
  *  Contents: memory allocation routines                                    *
  ****************************************************************************/
 
-const UINT N1=4, N2=4, N3=4, N4=(128+3-1*N1-2*N2-3*N3)/4;
-const UINT UNIT_SIZE=12, N_INDEXES=N1+N2+N3+N4;
+static const UINT N1=4, N2=4, N3=4, N4=(128+3-1*N1-2*N2-3*N3)/4;
+static const UINT UNIT_SIZE=12, N_INDEXES=N1+N2+N3+N4;
 
 #pragma pack(1)
 struct MEM_BLKh {

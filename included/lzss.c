@@ -5,7 +5,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-void lzss_set_window(u8 *window, int window_size, int init_chr) {
+static int EI = 12, EJ = 4, P = 2, rless = 2/*P*/;
+
+static int N/* = 1<<EI*/;      /* size of ring buffer */
+static int F/* = (1<<EJ)+P*/;  /* upper limit for match_length */
+static int THRESHOLD = 2/*P*/; /* encode string into position and length if match_length is greater than this */
+static int NIL;// N;           /* index for root of binary search trees */
+static int init_chr = ' ';
+
+static void lzss_init(void) {
+    EI = 12;    /* typically 10..13 */
+    EJ = 4;     /* typically 4..5 */
+    P  = 2;     /* If match length <= P then output one character */
+    rless = P;  // in some rare implementations it could be 0
+    init_chr = ' ';
+}
+
+static void lzss_set_window(u8 *window, int window_size, int init_chr) {
     int     i,
             n;
     switch(init_chr) {
@@ -30,13 +46,7 @@ void lzss_set_window(u8 *window, int window_size, int init_chr) {
 }
 
 int unlzss(unsigned char *src, int srclen, unsigned char *dst, int dstlen, u8 *parameters) {
-    int EI = 12;    /* typically 10..13 */
-    int EJ = 4;     /* typically 4..5 */
-    int P  = 2;     /* If match length <= P then output one character */
-    int N;
-    int F;
-    int rless = P;  // in some rare implementations it could be 0
-    int init_chr = ' ';
+    lzss_init();
 
     static int slide_winsz = 0;
     static unsigned char *slide_win = NULL;
@@ -115,22 +125,12 @@ quit:
 		CompuServe	74050,1022
 **************************************************************/
 
-int lzss_compress(u8 *in, int insz, u8 *out, int outsz, u8 *parameters) {
-        int     EI = 12, EJ = 4, P = 2, rless = P;
-
-int N =		 1<<EI;	/* size of ring buffer */
-int F =		   (1<<EJ)+P;	/* upper limit for match_length */
-int THRESHOLD =	P;   /* encode string into position and length
-						   if match_length is greater than this */
-int NIL;//			N;	/* index for root of binary search trees */
-int init_chr = ' ';
-
-unsigned int
+static unsigned int
 		textsize = 0,	/* text size counter */
 		codesize = 0;	/* code size counter */
 static unsigned char *text_buf = NULL;	/* ring buffer of size N,
 			with extra F-1 bytes to facilitate string comparison */
-int		match_position, match_length;  /* of longest match.  These are
+static int		match_position, match_length;  /* of longest match.  These are
 			set by the InsertNode() procedure. */
 static int  *lson = NULL,
             *rson = NULL,
@@ -143,17 +143,17 @@ unsigned char   *infile   = NULL,
                 *infilel  = NULL,
                 *outfile  = NULL,
                 *outfilel = NULL;
-int lzss_xgetc(void *skip) {
+static int lzss_xgetc(void *skip) {
     if(infile >= infilel) return -1;
     return(*infile++);
 }
-int lzss_xputc(int chr, void *skip) {
+static int lzss_xputc(int chr, void *skip) {
     if(outfile >= outfilel) return -1;
     *outfile++ = chr;
     return(chr);
 }
 
-void InitTree(void)  /* initialize trees */
+static void InitTree(void)  /* initialize trees */
 {
 	int  i;
 
@@ -169,7 +169,7 @@ void InitTree(void)  /* initialize trees */
 	for (i = 0; i < N; i++) dad[i] = NIL;
 }
 
-void InsertNode(int r)
+static void InsertNode(int r)
 	/* Inserts string of length F, text_buf[r..r+F-1], into one of the
 	   trees (text_buf[r]'th tree) and returns the longest-match position
 	   and length via the global variables match_position and match_length.
@@ -204,7 +204,7 @@ void InsertNode(int r)
 	dad[p] = NIL;  /* remove p */
 }
 
-void DeleteNode(int p)  /* deletes node p from tree */
+static void DeleteNode(int p)  /* deletes node p from tree */
 {
 	int  q;
 	
@@ -225,7 +225,7 @@ void DeleteNode(int p)  /* deletes node p from tree */
 	dad[p] = NIL;
 }
 
-void Encode(void)
+static void Encode(void)
 {
 	int  i, c, len, r, s, last_match_length, code_buf_ptr;
 	unsigned char  code_buf[/*17*/33/*???*/], mask;
@@ -295,6 +295,16 @@ void Encode(void)
 		codesize += code_buf_ptr;
 	}
 }
+
+int lzss_compress(u8 *in, int insz, u8 *out, int outsz, u8 *parameters) {
+    lzss_init();
+
+    N = 1<<EI;
+    F = (1<<EJ)+P;
+    THRESHOLD =	P;
+
+		textsize = 0;	/* text size counter */
+		codesize = 0;	/* code size counter */
 
     infile   = in;
     infilel  = in + insz;

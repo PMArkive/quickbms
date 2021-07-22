@@ -52,6 +52,10 @@
 
 #include "zzip.h"
 
+#ifndef S_IREAD
+#define	S_IREAD		S_IRUSR
+#endif
+
 #ifdef SFX
 # include "sfx_code.h"
 #endif

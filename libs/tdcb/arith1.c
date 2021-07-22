@@ -28,8 +28,9 @@ typedef struct {
 #define MAXIMUM_SCALE   16383  /* Maximum allowed frequency count        */
 #define END_OF_STREAM   256    /* The EOF symbol                         */
 
-extern long underflow_bits;    /* The present underflow count in         */
+//extern long underflow_bits;    /* The present underflow count in         */
                                /* the arithmetic coder.                  */
+#define totals  arith1_totals
 static int *totals[ 257 ] = {NULL};     /* Pointers to the 257 context tables     */
 
 /*
@@ -248,9 +249,13 @@ SYMBOL *s;
  * by declaring them as short ints, they will actually be 16 bits
  * on most 80X86 and 680X0 machines, as well as VAXen.
  */
+#define code    arith1_code
 static unsigned short int code;  /* The present input code value       */
+#define low     arith1_low
 static unsigned short int low;   /* Start of the current code range    */
+#define high    arith1_high
 static unsigned short int high;  /* End of the current code range      */
+#define underflow_bits  arith1_underflow_bits
 long underflow_bits;             /* Number of underflow bits pending   */
 
 /*

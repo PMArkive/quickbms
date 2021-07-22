@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2019 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -22,10 +22,15 @@
 
 
 
+static const u8     hex_codes[] = "0123456789abcdef";
+
+
+
 // the macro is better for size and debugging (no stack canary and ret)
 static inline void set_int3(const void *dllname, const void *hlib, const void *funcname, const void *funcaddr, const void *argc) {
 //#define set_int3(dllname, hlib, funcname, funcaddr, argc) {
     if(g_int3) {
+#if defined(__i386__) || defined(__x86_64__)
 #if __x86_64__
         __asm__ __volatile__ ("movq %0, %%rax" :: "g"(dllname)  :        "rcx", "rdx", "rsi", "rdi");
         __asm__ __volatile__ ("movq %0, %%rcx" :: "g"(hlib)     : "rax",        "rdx", "rsi", "rdi");
@@ -41,6 +46,7 @@ static inline void set_int3(const void *dllname, const void *hlib, const void *f
 #endif
         __asm__ __volatile__ ("int3");
         __asm__ __volatile__ ("nop");
+#endif
     }
 }
 
@@ -74,7 +80,7 @@ static inline void set_int3(const void *dllname, const void *hlib, const void *f
     #define BACKGROUND_RED	64
     #define BACKGROUND_INTENSITY	128
 #endif
-void _rgb(u8 *str) {
+int _rgb(u8 *str) {
     static int  original = -1;
     if(original < 0) {
         CONSOLE_SCREEN_BUFFER_INFO  csbi;
@@ -82,11 +88,11 @@ void _rgb(u8 *str) {
         original = csbi.wAttributes;
     }
 
+    int     i = 0; // returned
     int     color = 0;
-    if(!str) {
+    if(!str || !str[0]) {
         color = original;
     } else {
-        int i;
         for(i = 0; str[i]; i++) {
             switch(str[i]) {
                 case 'o':
@@ -100,19 +106,90 @@ void _rgb(u8 *str) {
                 case 'B': color |= BACKGROUND_BLUE;         break;
                 case 'I': color |= BACKGROUND_INTENSITY;    break;
                 case 'x': original = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; color = original; break;
-                default: break;
+                default:  return -1;                        break;
             }
         }
     }
+    if(!color) color = original;    // just in case (already handled by !str[0])
+    if(color == FOREGROUND_INTENSITY) color |= original;
+    if(color == BACKGROUND_INTENSITY) color |= original;
     SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color);
     //SetConsoleTextAttribute(GetStdHandle(STD_ERROR_HANDLE), color);   // wrong, do not enable
+    return i;
+}
+
+
+
+int _ansi_color_foreground(u8 chr) {
+    u8  *p = strchr(hex_codes, tolower(chr));
+    if(!p) return -1;
+    int color = 0;
+    int code = p - (u8 *)hex_codes;
+    if(code & 1) color |= FOREGROUND_RED;
+    if(code & 2) color |= FOREGROUND_GREEN;
+    if(code & 4) color |= FOREGROUND_BLUE;
+    if(code & 8) color |= FOREGROUND_INTENSITY;
+    return color;
+}
+
+int _ansi_color_background(u8 chr) {
+    u8  *p = strchr(hex_codes, tolower(chr));
+    if(!p) return -1;
+    int color = 0;
+    int code = p - (u8 *)hex_codes;
+    if(code & 1) color |= BACKGROUND_RED;
+    if(code & 2) color |= BACKGROUND_GREEN;
+    if(code & 4) color |= BACKGROUND_BLUE;
+    if(code & 8) color |= BACKGROUND_INTENSITY;
+    return color;
+}
+
+int ansi_colors(u8 *str) {
+    static int  original = -1;
+    if(original < 0) {
+        CONSOLE_SCREEN_BUFFER_INFO  csbi;
+        GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+        original = csbi.wAttributes;
+    }
+
+    int     t;
+    int     color = 0;
+    if(!str || !str[0]) {
+        color = original;
+    } else {
+        if(strlen(str) <= 2) {
+            t = _ansi_color_foreground(str[0]);
+            if(t < 0) t = original;
+            color |= t;
+            if(strlen(str) == 2) {
+                t = _ansi_color_background(str[1]);
+                if(t < 0) t = original;
+                color |= t;
+            }
+        } else {
+            if(stristr(str, "Black"))   color = 0;
+            if(stristr(str, "Red"))     color = FOREGROUND_RED;
+            if(stristr(str, "Green"))   color =                  FOREGROUND_GREEN;
+            if(stristr(str, "Yellow"))  color = FOREGROUND_RED | FOREGROUND_GREEN;
+            if(stristr(str, "Blue"))    color =                                     FOREGROUND_BLUE;
+            if(stristr(str, "Magenta")) color = FOREGROUND_RED                    | FOREGROUND_BLUE;
+            if(stristr(str, "Cyan"))    color =                  FOREGROUND_GREEN | FOREGROUND_BLUE;
+            if(stristr(str, "White"))   color = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+            if(stristr(str, "bright"))  color |= FOREGROUND_INTENSITY;
+        }
+    }
+    if(!color) color = original;    // just in case (already handled by !str[0])
+    if(color == FOREGROUND_INTENSITY) color |= original;
+    if(color == BACKGROUND_INTENSITY) color |= original;
+    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color);
+    //SetConsoleTextAttribute(GetStdHandle(STD_ERROR_HANDLE), color);   // wrong, do not enable
+    return 0;
 }
 
 
 
 u8 *show_dump(int left, u8 *data, int len, FILE *stream) {
     int                 rem;
-    static const u8     hex[16] = "0123456789abcdef";
     u8                  leftbuff[80],
                         buff[67],
                         chr,
@@ -155,8 +232,8 @@ u8 *show_dump(int left, u8 *data, int len, FILE *stream) {
         bytes = p + 50;
         while(data < limit) {
             chr = *data;
-            *p++ = hex[chr >> 4];
-            *p++ = hex[chr & 15];
+            *p++ = hex_codes[chr >> 4];
+            *p++ = hex_codes[chr & 15];
             p++;
             *bytes++ = ((chr < ' ') || (chr >= 0x7f)) ? '.' : chr;
             data++;
@@ -176,9 +253,8 @@ u8 *show_dump(int left, u8 *data, int len, FILE *stream) {
 
 
 void show_hex_chr(unsigned char chr) {
-    static const u8     hex[16] = "0123456789abcdef";
-    fputc(hex[chr >> 4], stdout);
-    fputc(hex[chr & 15], stdout);
+    fputc(hex_codes[chr >> 4], stdout);
+    fputc(hex_codes[chr & 15], stdout);
 }
 
 
@@ -202,6 +278,16 @@ int check_extension(u8 *fname, u8 *ext) {
     p++;
     if(!stricmp(p, ext)) return 1;
     return 0;
+}
+
+
+
+int myabs(int n) {
+    if(n < 0) {
+        n = -n;
+        if(n < 0) n = 0;    // 0x80000000
+    }
+    return n;
 }
 
 
@@ -250,6 +336,8 @@ u8 *mystrdup(u8 **old_buff, u8 *str) { // multiplatform compatible
         o = realloc(o, len + 1);
         if(!o) STD_ERR(QUICKBMS_ERROR_MEMORY);
         memcpy(o, str, len + 1);
+    } else {
+        o = NULL;
     }
     if(old_buff) {
         if(!o) {
@@ -357,11 +445,28 @@ i32 mystricmp(const char *a, const char *b) {
 }
 i32 mystrncmp(const char *a, const char *b, i32 n) {
     check_strcmp_args
+    if(n < 0) return 0;
     return real_strncmp(a, b, n);
 }
 i32 mystrnicmp(const char *a, const char *b, i32 n) {
     check_strcmp_args
+    if(n < 0) return 0;
     return real_strnicmp(a, b, n);
+}
+i32 mymemicmp(const void *a, const void *b, size_t n) {
+    check_strcmp_args
+    if(n < 0) return 0;
+    i32 res;
+    unsigned char   *x = (unsigned char *)a,
+                    *y = (unsigned char *)b;
+    while(n--) {
+        res = toupper(*x) - toupper(*y);
+        if(res < 0) return -1;
+        if(res > 0) return 1;
+        x++;
+        y++;
+    }
+    return 0;
 }
 
 
@@ -398,7 +503,10 @@ swprintf is horrible...
 1) swprintf doesn't have the sizeOfBuffer field on old versions of Windows C library, so it's behaviour in gcc 4 and 7 is different
 2) __mingw_swprintf is bugged on gcc 7 so do NOT use it!
 3) _swprintf_p is not even linked...
+4) 2021: DO NOT USE swprintf! it didn't work on gcc 10 due to the different prototype (for example "rb" became "r")
+#define QUICKBMS_SWPRINTF
 */
+#ifdef QUICKBMS_SWPRINTF
 #ifdef WIN32    // gcc4 vs gcc7
     #if __MSVCRT_VERSION__ >= __MSVCR80_DLL
     #else
@@ -408,10 +516,11 @@ swprintf is horrible...
 #ifndef myswprintf
     #define myswprintf(X,Y,Z,...)   swprintf(X, Y, Z, __VA_ARGS__)
 #endif
+#endif
 
 #ifdef WIN32
-#define tmp_sprintf     snprintf
-#define tmp_sWprintf    myswprintf
+#define tmp_strcpy      strcpy
+#define tmp_Wstrcpy     mywstrcpy
 UINT_PTR CALLBACK OFN_DUMMY_HOOK(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
     return 0;
 }
@@ -435,13 +544,24 @@ void *build_lpstrFilter(void) {
 
     ret_len *= sizeof(wchar_t);
     ret = realloc(ret, ret_len + sizeof(wchar_t));
+    if(!ret) STD_ERR(QUICKBMS_ERROR_MEMORY);
+    *(wchar_t *)ret = 0;
 
     wchar_t *fW = ret;
     for(i = 0; (f = g_filter_in_files[i]); i++) {
+        #ifdef QUICKBMS_SWPRINTF
         myswprintf(fW, (ret_len - ((void *)fW - (void *)ret)) / sizeof(wchar_t), L"(%s)", native_utf8_to_unicode(f));
         fW += wcslen(fW) + 1;   // correct
         myswprintf(fW, (ret_len - ((void *)fW - (void *)ret)) / sizeof(wchar_t), L"%s",   native_utf8_to_unicode(f));
         fW += wcslen(fW) + 1;   // correct
+        #else
+        mywstrcpy(fW, L"(");                        fW += wcslen(fW);
+        mywstrcpy(fW, native_utf8_to_unicode(f));   fW += wcslen(fW);
+        mywstrcpy(fW, L")");                        fW += wcslen(fW);
+        fW += 1;    // correct
+        mywstrcpy(fW, native_utf8_to_unicode(f));   fW += wcslen(fW);
+        fW += 1;    // correct
+        #endif
     }
     *fW++ = 0;
     *fW++ = 0;
@@ -466,7 +586,7 @@ char *get_file(char *title, i32 bms, i32 multi) {
     char    *filename;
 
     if(multi) {
-        maxlen = 0x40000;   // was MULTI_PATHSZ: 32k limit ansi, no limit unicode (apparently there is a limit of 0xffff chars, 16bit in lpstrFile)
+        maxlen = 0x100000;  // was MULTI_PATHSZ: 32k limit ansi, no limit unicode (apparently there is a limit of 0xffff chars, 16bit in lpstrFile)
     } else {
         maxlen = PATHSZ;
     }
@@ -524,7 +644,11 @@ char *get_file(char *title, i32 bms, i32 multi) {
         // UNICODE version
         OPENFILENAMEW   ofnW;
         wchar_t titleW[strlen(title)+1];
+        #ifdef QUICKBMS_SWPRINTF
         myswprintf(titleW, sizeof(titleW) / sizeof(wchar_t), L"%s", native_utf8_to_unicode(title));
+        #else
+        mywstrcpy(titleW, native_utf8_to_unicode(title));
+        #endif
         wchar_t *filenameW = calloc(maxlen + 1, sizeof(wchar_t));
         if(!filenameW) STD_ERR(QUICKBMS_ERROR_MEMORY);
         _get_file(W,L)
@@ -557,7 +681,7 @@ char *get_folder(char *title) {
     printf("- %s\n", title);
 
 #define _get_folder(W,L) \
-    tmp_s##W##printf(filename##W, maxlen + 1, L##"%s", L##"enter in the output folder and press Save"); \
+    tmp_##W##strcpy( filename##W,                      L##"enter in the output folder and press Save"); \
     memset(&ofn##W, 0, sizeof(ofn##W)); \
     ofn##W.lStructSize  = (g_osver.dwMajorVersion <= 4) ? OPENFILENAME_SIZE_VERSION_400 : sizeof(ofn##W); \
     ofn##W.lpstrFilter  = L## "(*.*)\0" "*.*\0" "\0" "\0"; \
@@ -587,7 +711,11 @@ char *get_folder(char *title) {
         // UNICODE version
         OPENFILENAMEW   ofnW;
         wchar_t titleW[strlen(title)+1];
+        #ifdef QUICKBMS_SWPRINTF
         myswprintf(titleW, sizeof(titleW) / sizeof(wchar_t), L"%s", native_utf8_to_unicode(title));
+        #else
+        mywstrcpy(titleW, native_utf8_to_unicode(title));
+        #endif
         wchar_t *filenameW = calloc(maxlen + 1, sizeof(wchar_t));
         if(!filenameW) STD_ERR(QUICKBMS_ERROR_MEMORY);
         _get_folder(W,L)
@@ -599,8 +727,8 @@ char *get_folder(char *title) {
     if(p) *p = 0;
     return(filename);
 }
-#undef tmp_sWprintf
-#undef tmp_sprintf
+#undef tmp_strcpy
+#undef tmp_Wstrcpy
 #endif
 
 
@@ -802,7 +930,7 @@ u8 *myitoa(int num) {
 
     p = dst;
     if(num < 0) {
-        num = -num;
+        num = -num; //don't use myabs(num)
         *p++ = '-';
     }
     unum = num; // needed for the sign... many troubles
@@ -937,6 +1065,14 @@ int myisdechex_string(u8 *str) {
 
     // I have already verified that using a quick test only on the first char doesn't improve the performances if compared to the current full check
     if(!str) return 0;
+
+    // sort of isprint, necessary to avoid that invalid strings are handled as numbers because readbase ignores these bytes
+    int     i;
+    for(i = 0; str[i]; i++) {
+        if(str[i] <= 0x1f) return 0;
+        if(str[i] >= 0x7f) return 0;
+    }
+
     readbase(str, 10, &len);    // no need to know the number
     if(len <= 0) return 0;     // FALSE
     if(len != strlen(str)) return 0;    // otherwise there are huge problems with GetArray and If
@@ -1043,6 +1179,139 @@ u32 myntohl(u32 n) {
 
 
 
+ // code derived from ReactOS rot.c
+ u32 myrotl(  u32 value, int shift );
+ u32 myrotr(  u32 value, int shift );
+ u64 mylrotl( u64 value, int shift );
+ u64 mylrotr( u64 value, int shift );
+ u32 myrotl(  u32 value, int shift )
+ {
+     int max_bits = sizeof(u32)<<3;
+     if ( shift < 0 )
+         return myrotr(value,-shift);
+ 
+     if ( shift > max_bits )
+         shift = shift % max_bits;
+     return (value << shift) | (value >> (max_bits-shift));
+ }
+ u32 myrotr( u32 value, int shift )
+ {
+     int max_bits = sizeof(u32)<<3;
+     if ( shift < 0 )
+         return myrotl(value,-shift);
+ 
+     if ( shift > max_bits )
+         shift = shift % max_bits;
+     return (value >> shift) | (value <<  (max_bits-shift));
+ }
+ u64 mylrotl( u64 value, int shift )
+ {
+     int max_bits = sizeof(u64)<<3;
+     if ( shift < 0 )
+         return mylrotr(value,-shift);
+ 
+     if ( shift > max_bits )
+         shift = shift % max_bits;
+     return (value << shift) | (value >> (max_bits-shift));
+ }
+ u64 mylrotr( u64 value, int shift )
+ {
+     int max_bits = sizeof(u64)<<3;
+     if ( shift < 0 )
+         return mylrotl(value,-shift);
+ 
+     if ( shift > max_bits )
+         shift = shift % max_bits;
+     return (value >> shift) | (value << (max_bits-shift));
+ }
+
+
+
+int dump128num(u8 *digest, u64 low, u64 high) {
+    int     i;
+    for(i = 0; i < 8; i++) {
+        digest[7 - i] = high;
+        high >>= (u64)8;
+    }
+    for(i = 0; i < 8; i++) {
+        digest[15 - i] = low;
+        low >>= (u64)8;
+    }
+    return 16;
+}
+
+
+
+char *stristr(const char *String, const char *Pattern)
+{
+      char *pptr, *sptr, *start;
+
+      if(!String) return 0;
+      if(!Pattern) Pattern = "";
+
+      for (start = (char *)String; *start; start++)
+      {
+            /* find start of pattern in string */
+            for ( ; (*start && (toupper(*start) != toupper(*Pattern))); start++)
+                  ;
+            if (!*start)
+                  return 0;
+
+            pptr = (char *)Pattern;
+            sptr = (char *)start;
+
+            while (toupper(*sptr) == toupper(*pptr))
+            {
+                  sptr++;
+                  pptr++;
+
+                  /* if end of pattern then pattern was found */
+
+                  if (!*pptr)
+                        return (start);
+            }
+      }
+      return 0;
+}
+
+
+
+char *strnistr(const char *String, int String_len, const char *Pattern, int Pattern_len)
+{
+      char *pptr, *sptr, *start;
+
+      if(!String) return 0;
+      if(!Pattern) Pattern = "";
+      if(String_len  < 0) String_len  = strlen(String);
+      if(Pattern_len < 0) Pattern_len = strlen(Pattern);
+      char *end = (char *)String + String_len;
+
+      for (start = (char *)String; start < end; start++)
+      {
+            /* find start of pattern in string */
+            for ( ; ((start < end) && (toupper(*start) != toupper(*Pattern))); start++)
+                  ;
+            if (start >= end) //(!*start)
+                  return 0;
+
+            pptr = (char *)Pattern;
+            sptr = (char *)start;
+            char *eptr = (char *)Pattern + Pattern_len;
+
+            while ((sptr < end) && (pptr < eptr) && (toupper(*sptr) == toupper(*pptr)))
+            {
+                  sptr++;
+                  pptr++;
+            }
+                  /* if end of pattern then pattern was found */
+                  if (pptr >= eptr) //(!*pptr)
+                        return (start);
+      }
+      return 0;
+}
+
+
+
 u8 *strristr(u8 *s1, u8 *s2) {
     int     s1n,
             s2n;
@@ -1051,6 +1320,21 @@ u8 *strristr(u8 *s1, u8 *s2) {
     if(!s1 || !s2) return NULL;
     s1n = strlen(s1);
     s2n = strlen(s2);
+    if(s2n > s1n) return NULL;
+    for(p = s1 + (s1n - s2n); p >= s1; p--) {
+        if(!strnicmp(p, s2, s2n)) return(p);
+    }
+    return NULL;
+}
+
+
+
+u8 *strrnistr(u8 *s1, int s1n, u8 *s2, int s2n) {
+    u8      *p;
+
+    if(!s1 || !s2) return NULL;
+    if(s1n < 0) s1n = strlen(s1);
+    if(s2n < 0) s2n = strlen(s2);
     if(s2n > s1n) return NULL;
     for(p = s1 + (s1n - s2n); p >= s1; p--) {
         if(!strnicmp(p, s2, s2n)) return(p);
@@ -1074,9 +1358,9 @@ int vspr(u8 **buff, const u8 *fmt, va_list ap) {
     if(!fmt) return 0;
     mlen = strlen(fmt) + 128;
     for(;;) {
-        ret = realloc(ret, mlen + 1);
+        ret = realloc(ret, mlen + 1 + 1);   // snprintf is a mess, better to use an additional +1
         if(!ret) return 0;     // return -1;
-        len = vsnprintf(ret, mlen, fmt, ap);
+        len = vsnprintf(ret, mlen + 1, fmt, ap);
         if((len >= 0) && (len < mlen)) break;
         va_copy(ap, ap_bck);
         if(len > mlen) mlen = len;
@@ -1097,6 +1381,18 @@ int spr(u8 **buff, const u8 *fmt, ...) {
     len = vspr(buff, fmt, ap);
     va_end(ap);
     return len;
+}
+
+
+
+u8 *spr2(const u8 *fmt, ...) {
+    va_list ap;
+    u8      *ret    = NULL;
+
+    va_start(ap, fmt);
+    vspr(&ret, fmt, ap);
+    va_end(ap);
+    return ret;
 }
 
 
@@ -1294,6 +1590,7 @@ files_t *add_files(u8 *fname, u64 fsize, int *ret_files) {
     }
 
     if(!fname) return NULL;
+
     if(check_wildcards(fname, g_filter_in_files) < 0) return NULL;
 
     if(filesi >= filesn) {
@@ -1316,6 +1613,21 @@ files_t *add_files(u8 *fname, u64 fsize, int *ret_files) {
 
 
 
+#ifdef WIN32
+    // nothing
+#else
+// just a work-around, it saves some memory by avoiding to collect all the files recursively
+static u8 *quick_simple_tmpname_scanner_filter_filedir = NULL;
+static int quick_simple_tmpname_scanner_filter(const struct dirent *namelist) {
+    if(!strcmp(namelist->d_name, ".") || !strcmp(namelist->d_name, "..")) return 0;
+    if(check_wildcard(namelist->d_name, quick_simple_tmpname_scanner_filter_filedir) < 0) return 0;
+    return 1;
+}
+#endif
+
+
+
+// copy of recursive_dir without support for unicode since it's useless here
 int quick_simple_tmpname_scanner(u8 *filedir, int filedirsz) {
     int     plen,
             namelen,
@@ -1370,13 +1682,8 @@ int quick_simple_tmpname_scanner(u8 *filedir, int filedirsz) {
         if(!strcmp(wfd.cFileName, ".") || !strcmp(wfd.cFileName, "..")) continue;
         p = wfd.cFileName;
 #else
-    // just a work-around, it saves some memory by avoiding to collect all the files recursively
-    int quick_simple_tmpname_scanner_filter(const struct dirent *namelist) {
-        if(!strcmp(namelist->d_name, ".") || !strcmp(namelist->d_name, "..")) return 0;
-        if(check_wildcard(namelist->d_name, filedir) < 0) return 0;
-        return 1;
-    }
     // scandir works only with directories
+    quick_simple_tmpname_scanner_filter_filedir = filedir;
     n = scandir(".", &namelist, &quick_simple_tmpname_scanner_filter, NULL);
     if(n < 0) goto quit;
     for(i = 0; i < n; i++) {
@@ -1424,6 +1731,66 @@ quit:
 
 #define recursive_dir_skip_path 0
 //#define recursive_dir_skip_path 2
+
+
+
+#ifdef WIN32
+
+static HANDLE WINAPI (*myFindFirstFileExW)(
+  LPCWSTR            lpFileName,
+  FINDEX_INFO_LEVELS fInfoLevelId,
+  LPVOID             lpFindFileData,
+  FINDEX_SEARCH_OPS  fSearchOp,
+  LPVOID             lpSearchFilter,
+  DWORD              dwAdditionalFlags
+) = NULL;
+
+static BOOL WINAPI (*myFindNextFileW)(
+  HANDLE             hFindFile,
+  LPWIN32_FIND_DATAW lpFindFileData
+) = NULL;
+
+int recursive_dirW(wchar_t *filedir, int filedirsz) {
+    int     plen,
+            namelen,
+            ret     = -1;
+
+    WIN32_FIND_DATAW wfd;
+    HANDLE          hFind = INVALID_HANDLE_VALUE;
+
+    plen = wcslen(filedir);
+    if((plen + 4) >= filedirsz) goto quit;
+    mywstrcpy(filedir + plen, L"\\*.*");
+    plen++;
+
+    hFind = myFindFirstFileExW(filedir, FindExInfoStandard, &wfd, FindExSearchNameMatch, NULL, 0);
+    if(hFind == INVALID_HANDLE_VALUE) goto quit;
+    do {
+        if((wfd.cFileName[0] == '.') && !wfd.cFileName[1]) continue;    // "."
+        if((wfd.cFileName[0] == '.') && (wfd.cFileName[1] == '.') && !wfd.cFileName[2]) continue;   // ".."
+        //if(!mywstrcmp(wfd.cFileName, L".") || !mywstrcmp(wfd.cFileName, L"..")) continue;
+
+        namelen = wcslen(wfd.cFileName);
+        if((plen + namelen) >= filedirsz) goto quit;
+        mywstrcpy(filedir + plen, wfd.cFileName);
+
+        if(wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            recursive_dirW(filedir, filedirsz);  // NO goto quit
+        } else {
+            add_files(native_unicode_to_utf8(filedir + recursive_dir_skip_path), ((u64)wfd.nFileSizeHigh << (u64)(sizeof(wfd.nFileSizeLow) * 8)) | (u64)wfd.nFileSizeLow, NULL);
+        }
+    } while(myFindNextFileW(hFind, &wfd));
+    ret = 0;
+
+quit:
+    if(hFind != INVALID_HANDLE_VALUE) FindClose(hFind);
+    filedir[plen - 1] = 0;
+    return ret;
+}
+#endif
+
+
+
 int recursive_dir(u8 *filedir, int filedirsz) {
     int     plen,
             namelen,
@@ -1431,6 +1798,7 @@ int recursive_dir(u8 *filedir, int filedirsz) {
 
     if(!filedir) return ret;
 #ifdef WIN32
+
     static int      winnt = -1;
     OSVERSIONINFO   osver;
     WIN32_FIND_DATA wfd;
@@ -1440,10 +1808,25 @@ int recursive_dir(u8 *filedir, int filedirsz) {
         osver.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
         GetVersionEx(&osver);
         if(osver.dwPlatformId >= VER_PLATFORM_WIN32_NT) {
+            static HMODULE kernel32 = NULL;
+            if(!kernel32) kernel32 = GetModuleHandle("kernel32.dll");
+            if(kernel32) {
+                if(!myFindFirstFileExW) myFindFirstFileExW = (void *)GetProcAddress(kernel32, "FindFirstFileExW");
+                if(!myFindNextFileW)    myFindNextFileW    = (void *)GetProcAddress(kernel32, "FindNextFileW");
+            }
             winnt = 1;
         } else {
             winnt = 0;
         }
+    }
+
+    if(winnt && myFindFirstFileExW && myFindNextFileW) {
+        wchar_t *filedirW = calloc(filedirsz + 1, sizeof(*filedirW));
+        if(!filedirW) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        mywstrcpy(filedirW, native_utf8_to_unicode(filedir));
+        ret = recursive_dirW(filedirW, filedirsz);
+        FREE(filedirW);
+        return ret;
     }
 
     plen = strlen(filedir);
@@ -1529,11 +1912,31 @@ quit:
 
 
 
+u_int filesize(FILE *fd) {
+    struct stat xstat;
+    if(!fd) return 0;
+    xstat.st_size = 0;
+    fstat(fileno(fd), &xstat);
+    return(xstat.st_size);
+}
+
+
+
 typedef struct {
     u8  *datafile;
     u8  *p;
     u8  *limit;
 } datafile_t;
+
+int datafile_init(datafile_t *df, u8 *data, int size) {
+    if(size < 0) return -1;
+    if(!data && (size > 0)) return -1;
+    memset(df, 0, sizeof(datafile_t));
+    df->datafile = data;
+    df->p        = data;
+    df->limit    = data + size;
+    return 0;
+}
 
 int incremental_fread_getc(FILE *fd, datafile_t *df, u8 *data, int utf16) {
     int     t   = 0;
@@ -1889,7 +2292,7 @@ u8 *get_main_path(u8 *fname, u8 *argv0, u8 *output) {
     p = mystrrchrs(output, PATH_DELIMITERS);
     if(fname) {
         if(!p) p = output - 1;
-        sprintf(p + 1, "%.*s", PATHSZ - (p - output), fname);
+        sprintf(p + 1, "%.*s", (i32)(PATHSZ - (p - output)), fname);
     } else {
         if(p) *p = 0;
     }
@@ -1942,17 +2345,22 @@ int xchdir(u8 *folder) {
 int make_dir(u8 *folder) {
     int     ret;
 #ifdef WIN32
-    ret = _wmkdir(native_utf8_to_unicode(long_name_support(folder)));   // unicode + long name support
-    if(ret < 0) ret = _wmkdir(native_utf8_to_unicode(folder));          // unicode
-    if(ret < 0) ret = mkdir(folder);                                    // automatic fall-back
-    if((ret < 0) && (strlen(folder) > MAX_PATH)) {
-        ret = mkdir(long_name_support(folder));                         // last chance with long name support
+    errno = 0;  // useless
+    ret = _wmkdir(native_utf8_to_unicode(long_name_support(folder)));                   // unicode + long name support
+    if((ret < 0) && (errno != EEXIST)) ret = _wmkdir(native_utf8_to_unicode(folder));   // unicode
+    if((ret < 0) && (errno != EEXIST)) ret = mkdir(folder);                             // automatic fall-back
+    if((ret < 0) && (errno != EEXIST) && (strlen(folder) > MAX_PATH)) {
+        ret = mkdir(long_name_support(folder));                                         // last chance with long name support
     }
 #else
     ret = mkdir(folder, 0755);
 #endif
     return ret;
 }
+
+
+
+int g_force_readwrite_mode  = 0;    // easy solution
 
 
 
@@ -1973,10 +2381,21 @@ FILE *xfopen(u8 *fname, u8 *mode) {
     wchar_t wmode[strlen(mode) + 20];
     // do NOT enable "ccs=UTF-8" or everything will be screwed on Wine or some languages
     // unfortunately I can't remember why it was so important to use ccs and in what situations, but there are no other solutions
+    #ifdef QUICKBMS_SWPRINTF
     myswprintf(wmode, sizeof(wmode) / sizeof(wchar_t), L"%s" /*", ccs=UTF-8"*/, native_utf8_to_unicode(mode));
+    #else
+    mywstrcpy(wmode, native_utf8_to_unicode(mode));
+    #endif
 
     // I have a report about this issue but can't verify it, very rare and affecting only some OS and/or filesystems I guess
     if((strlen(fname) > 2) && (strstr(fname + 2, "\\\\") || strstr(fname + 2, "//"))) {
+
+        // this is mandatory because we CANNOT modify the input otherwise log "data\\file" fails in append mode
+        u8      *tmp_fname = alloca(strlen(fname) + 1); // alloca() is on the stack, it's ok since this is rare
+        if(!tmp_fname) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        strcpy(tmp_fname, fname);
+        fname = tmp_fname;
+
         int     i, j;
         for(i = j = 0; fname[i]; i++, j++) {
             while(strchr(PATH_DELIMITERS, fname[i]) && strchr(PATH_DELIMITERS, fname[i + 1])) i++;
@@ -1985,22 +2404,31 @@ FILE *xfopen(u8 *fname, u8 *mode) {
         fname[j] = 0;
     }
 
+    if(g_force_readwrite_mode) _wchmod(native_utf8_to_unicode(long_name_support(fname)), _S_IREAD | _S_IWRITE);
     fd = _wfopen(native_utf8_to_unicode(long_name_support(fname)), wmode);
-    if(!fd) fd = _wfopen(native_utf8_to_unicode(fname), wmode); // try without long name support
+    if(!fd) {
+        if(g_force_readwrite_mode) _wchmod(native_utf8_to_unicode(fname), _S_IREAD | _S_IWRITE);
+        fd = _wfopen(native_utf8_to_unicode(fname), wmode); // try without long name support
+    }
 #endif
-    if(!fd) fd = fopen(fname, mode);    // fallback for Win98
+    if(!fd) {
+#ifdef WIN32    // avoid ACL issues
+        if(g_force_readwrite_mode) chmod(fname, _S_IREAD | _S_IWRITE);
+#endif
+        fd = fopen(fname, mode);    // fallback for Win98
+    }
     if(fd) {
         if((fd != stdin) && (fd != stdout) && (fd != stderr)) {
             setvbuf(fd, NULL, _IOFBF, 64 * 1024);   // default is good too, do NOT use bigger values!
         }
     }
+    if(g_force_readwrite_mode) g_force_readwrite_mode = 0;
     return fd;
 }
 
 
 
 u8 *fdload(u8 *fname, int *fsize) {
-    struct stat xstat;
     FILE    *fd;
     int     size;
     u8      *buff;
@@ -2012,8 +2440,7 @@ u8 *fdload(u8 *fname, int *fsize) {
     }
     fd = xfopen(fname, "rb");
     if(!fd) return NULL;
-    fstat(fileno(fd), &xstat);
-    size = xstat.st_size;
+    size = filesize(fd);
     MAX_ALLOC_CHECK(size);
     buff = malloc(size + 1);
     if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
@@ -2026,7 +2453,7 @@ u8 *fdload(u8 *fname, int *fsize) {
 
 
 
-u8 *string_to_C(u8 *data, int size, int *ret_len) {
+u8 *string_to_C(u8 *data, int size, int *ret_len, int binary) {
     int     i;
     int     buffsz  = 0;   // NOT static!!!
     static u8   *buff   = NULL; // static to save memory
@@ -2034,40 +2461,57 @@ u8 *string_to_C(u8 *data, int size, int *ret_len) {
     if(data) {
         if(size < 0) size = strlen(data);
 
-        for(i = 0; i < size; i++) {
-            // if(data[i] < ' ') ???
-            if(!data[i] || strchr("\n\r\\", data[i])) {
-                buff = realloc(buff, buffsz + 2);
-                if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        if(binary) {
+
+            buff = realloc(buff, (size * 4) + 1);   // pre-allocate
+            if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
+
+            for(i = 0; i < size; i++) {
                 buff[buffsz++] = '\\';
-                switch(data[i]) {
-                    case '\0': buff[buffsz++] = '0'; break;
-                    case '\n': buff[buffsz++] = 'n'; break;
-                    case '\r': buff[buffsz++] = 'r'; break;
-                    default: buff[buffsz++] = data[i]; break;
+                buff[buffsz++] = 'x';
+                buff[buffsz++] = hex_codes[data[i] >> 4];
+                buff[buffsz++] = hex_codes[data[i] & 15];
+            }
+
+        } else {
+
+            buff = realloc(buff, (size * 2) + 1);   // pre-allocate
+            if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
+
+            for(i = 0; i < size; i++) {
+                // if(data[i] < ' ') ???
+                if(!data[i] || strchr("\n\r\\", data[i])) {
+                    buff[buffsz++] = '\\';
+                    switch(data[i]) {
+                        case '\0': buff[buffsz++] = '0';     break;
+                        case '\n': buff[buffsz++] = 'n';     break;
+                        case '\r': buff[buffsz++] = 'r';     break;
+                        default:   buff[buffsz++] = data[i]; break;
+                    }
+                } else {
+                    buff[buffsz++] = data[i];
                 }
-            } else {
-                buff = realloc(buff, buffsz + 1);
-                if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
-                buff[buffsz++] = data[i];
             }
         }
+
+    } else {
+        buff = realloc(buff, buffsz + 1);
+        if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
     }
     if(ret_len) *ret_len = buffsz;
-    buff = realloc(buff, buffsz + 1);   // final NULL byte
-    if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
     buff[buffsz++] = 0;
     return buff;
 }
 
 
 
-int cstring(u8 *input, u8 *output, int maxchars, int *inlen) {
+int cstring(u8 *input, u8 *output, int maxchars, int *inlen, u32 *mask) {
     i32     n,
             len;
     u8      *p,
             *o;
 
+    if(mask) *mask = 0;
     if(!input || !output) {
         if(inlen) *inlen = 0;
         return 0;
@@ -2080,6 +2524,7 @@ int cstring(u8 *input, u8 *output, int maxchars, int *inlen) {
             if((o - output) >= maxchars) break;
         }
         if(*p == '\\') {
+            n = 0;  // useless
             p++;
             switch(*p) {
                 case 0:  goto quit; break;
@@ -2118,11 +2563,37 @@ int cstring(u8 *input, u8 *output, int maxchars, int *inlen) {
                 case 'x': {
                     //n = readbase(p + 1, 16, &len);
                     //if(len <= 0) goto quit;
-                    if(sscanf(p + 1, "%02x%n", &n, &len) != 1) goto quit;
+                    if(sscanf(p + 1, "%02x%n", &n, &len) != 1) {
+                        if(mask && ((p[1] == '?') || (p[1] == '*') || (p[2] == '?') || (p[2] == '*'))) {
+                            *mask = *mask | (1 << (o - output));
+                            n = 0;
+                            len = 1;
+                            if((p[2] == '?') || (p[2] == '*')) len = 2;
+                        } else {
+                            goto quit;
+                        }
+                    }
                     if(len > 2) len = 2;
                     p += len;
                     break;
                 }
+
+                // external, this is probably useless or wrong because our string is already parsed but programmers may be used to it
+                case '%':  n = *p;   break; // some languages???
+                case '[':  n = *p;   break; // ANSI / some languages???
+                case ']':  n = *p;   break; // ANSI / some languages???
+                case '{':  n = *p;   break; // some languages???
+                case '}':  n = *p;   break; // some languages???
+                case '*':  n = *p;   break; // shell?
+                case '&':  n = *p;   break; // Windows?
+                case '|':  n = *p;   break; // Windows?
+                case '<':  n = *p;   break; // Windows?
+                case '>':  n = *p;   break; // Windows?
+                case '(':  n = *p;   break; // Windows?
+                case ')':  n = *p;   break; // Windows?
+                case '`':  n = *p;   break; // PowerShell?
+                // external
+
                 default: {
                     //n = readbase(p, 8, &len);
                     //if(len <= 0) goto quit;
@@ -2454,55 +2925,60 @@ u8 *myalloc(u8 **data, QUICKBMS_int wantsize, QUICKBMS_int *currsize) {
         fprintf(stderr, "\nError: the requested amount of bytes to allocate is negative (0x%"PRIx")\n", wantsize);
         myexit(QUICKBMS_ERROR_MEMORY);
     }
-    if(!wantsize) return NULL;
+    //removed in quickbms 0.11 (problems with MEMORY_FILE and lack of real advantages) //if(!wantsize) return NULL;
     if(!data) return NULL;
 
     ows = wantsize;
     wantsize += MYALLOC_ZEROES; // needed by XMemDecompress
 
-
-
     // quick secure way that uses the advantages of xdbg_alloc
-    //if((wantsize < 0) || (wantsize < ows)) {    // due to integer rounding
-    if(wantsize < 0) {
-        fprintf(stderr, "\nError: the requested amount of bytes to allocate is negative or too big (0x%"PRIx")\n", wantsize);
-        myexit(QUICKBMS_ERROR_MEMORY);
-    }
-    if(currsize && (ows <= *currsize)) {
-        // too expensive: memset((*data) + ows, 0, *currsize - ows);
-        if(*currsize > 0) goto quit; //return(*data);
-    }
-    *data = realloc(*data, wantsize);
-    if(!*data) STD_ERR(QUICKBMS_ERROR_MEMORY);
-    if(currsize) *currsize = ows;
-    memset((*data) + ows, 0, wantsize - ows);
-    goto quit; //return(*data);
-    // end of quick secure way
+    if(XDBG_ALLOC_ACTIVE) {
 
-
-
-    wantsize = (wantsize + 4095) & (~4095);     // not bad as fault-safe and fast alloc solution: padding (4096 is usually the default size of a memory page)
-    if((wantsize < 0) || (wantsize < ows)) {    // due to integer rounding
-        fprintf(stderr, "\nError: the requested amount of bytes to allocate is negative/too big (0x%"PRIx")\n", wantsize);
-        myexit(QUICKBMS_ERROR_MEMORY);
-        //wantsize = ows;   // remember memset MYALLOC_ZEROES
-    }
-
-    if(currsize && (wantsize <= *currsize)) {
-        if(*currsize > 0) goto quit;
-    }
-
-    old_data = *data;
-    *data = realloc(*data, wantsize);
-    if(!*data) {
-        FREE(old_data);
-        *data = calloc(wantsize, 1);
-        if(!*data) {
-            fprintf(stderr, "- try allocating %"PRIu" bytes\n", wantsize);
-            STD_ERR(QUICKBMS_ERROR_MEMORY);
+        //if((wantsize < 0) || (wantsize < ows)) {    // due to integer rounding
+        if(wantsize < 0) {
+            fprintf(stderr, "\nError: the rounded amount of bytes to allocate is negative or too big (0x%"PRIx")\n", wantsize);
+            myexit(QUICKBMS_ERROR_MEMORY);
         }
+        if(currsize && (ows <= *currsize)) {
+            if(!*data) {
+                // we need to allocate something, even if wantsize is zero, so continue
+            } else {
+                // too expensive: memset((*data) + ows, 0, *currsize - ows);
+                if(*currsize > 0) goto quit; //return(*data);
+            }
+        }
+        *data = realloc(*data, wantsize);
+        if(!*data) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        if(currsize) *currsize = ows;
+        memset((*data) + ows, 0, wantsize - ows);
+        //goto quit; //return(*data);
+        // end of quick secure way
+
+    } else {
+
+        wantsize = (wantsize + 4095) & (~4095);     // not bad as fault-safe and fast alloc solution: padding (4096 is usually the default size of a memory page)
+        if((wantsize < 0) || (wantsize < ows)) {    // due to integer rounding
+            fprintf(stderr, "\nError: the rounded amount of bytes to allocate is negative or too big (0x%"PRIx")\n", wantsize);
+            myexit(QUICKBMS_ERROR_MEMORY);
+            //wantsize = ows;   // remember memset MYALLOC_ZEROES
+        }
+
+        if(currsize && (wantsize <= *currsize)) {
+            if(*currsize > 0) goto quit;
+        }
+
+        old_data = *data;
+        *data = realloc(*data, wantsize);
+        if(!*data) {
+            FREE(old_data);
+            *data = calloc(wantsize, 1);
+            if(!*data) {
+                fprintf(stderr, "- try allocating %"PRIu" bytes\n", wantsize);
+                STD_ERR(QUICKBMS_ERROR_MEMORY);
+            }
+        }
+        if(currsize) *currsize = wantsize - MYALLOC_ZEROES;      // obviously
     }
-    if(currsize) *currsize = wantsize - MYALLOC_ZEROES;      // obviously
 quit:
     memset((*data) + ows, 0, MYALLOC_ZEROES);   // ows is the original wantsize, useful in some cases like XMemDecompress
     return(*data);
@@ -2558,14 +3034,68 @@ void winerr(DWORD error, char *msg) {
 
 
 
+QUICKBMS_int get_var_from_name(u8 *name, QUICKBMS_int namelen);
+QUICKBMS_int get_var32(QUICKBMS_int idx);
+u8 *get_var(QUICKBMS_int idx);
+int add_var(int idx, u8 *name, u8 *val, int val32, int valsz);
+
+
+
 void myexit_last_script_line(int cmd) {
-    if(g_command[cmd].debug_line) {
-        fprintf(stderr, "\nLast script line before the error or that produced the error:\n  %s\n", g_command[cmd].debug_line);
+    if(CMD.debug_line) {
+
+        fprintf(stderr, "\nLast script line before the error or that produced the error:\n  %s\n", CMD.debug_line);
+
+        if(CMD.type == CMD_Log) {
+
+            fprintf(stderr,
+                "\n"
+                "- OFFSET       0x%"PRIx"\n"
+                "- SIZE         0x%"PRIx"\n",
+                VAR32(1), VAR32(2));
+
+        } else if(CMD.type == CMD_CLog) {
+
+            fprintf(stderr,
+                "\n"
+                "- OFFSET       0x%"PRIx"\n"
+                "- ZSIZE        0x%"PRIx"\n"
+                "- SIZE         0x%"PRIx"\n",
+                VAR32(1), VAR32(2), VAR32(5));
+
+        }
+    }
+
+    // -v or -V ?
+    if(g_verbose > 0) {
+        int     idx;
+        for(idx = 0; g_variable[idx].name; idx++) {
+
+            if(g_variable[idx].constant) continue;
+
+            fprintf(stderr, "\n"
+                "- Variable %-4d %s\n"
+                "    value:      %s\n"
+                "    value32:    0x%"PRIx"\n"
+                //"    float64:    %f\n"
+                "    size:       0x%"PRIx" / 0x%"PRIx"\n"
+                //"    flags:      %d %d %d %d %p\n"
+            ,
+            (i32)idx,
+            g_variable[idx].name,
+            g_variable[idx].value ? g_variable[idx].value : (u8 *)"",
+            g_variable[idx].value32,
+            //g_variable[idx].float64,
+            g_variable[idx].size, g_variable[idx].real_size
+            //g_variable[idx].isnum, g_variable[idx].constant, g_variable[idx].binary, g_variable[idx].reserved, g_variable[idx].sub_var
+            );
+        }
     }
 }
 
 
 
+void bms_finish(void);
 void myexit(int ret) {
 
     // yes, close it at the end of everything
@@ -2605,6 +3135,8 @@ void myexit(int ret) {
                     }
                 }
             }
+
+            bms_finish();   // for coverage and so on
         }
 
 #ifdef WIN32
@@ -2795,12 +3327,12 @@ int mymemmove(void *dstx, void *srcx, int size) {
 
 
 
-int myrand(void) {
-    static  int rnd = 0;
-
+u32 myrand(void) {
+    static  u32 rnd = 0;
+    // rng_crypt(&rnd, sizeof(rnd));    // real randomization
     if(!rnd) rnd = time(NULL);
     rnd = ((rnd * 0x343FD) + 0x269EC3);
-    return(rnd);
+    return(rnd & 0x7fffffff);
 }
 
 
@@ -2842,6 +3374,7 @@ u32 mydump(u8 *fname, u8 *data, u32 size) {
 
 // from NetBSD
 void *mymemmem(const void *b1, const void *b2, i32 len1, i32 len2) {
+    if(!b1 || !b2) return NULL;
     if(len1 < 0) len1 = strlen(b1);
     if(len2 < 0) len2 = strlen(b2);
 
@@ -2859,6 +3392,43 @@ void *mymemmem(const void *b1, const void *b2, i32 len1, i32 len2) {
         sp++;
     }
     return NULL;
+}
+
+
+
+void *mymemimem(const void *b1, const void *b2, i32 len1, i32 len2) {
+    if(!b1 || !b2) return NULL;
+    if(len1 < 0) len1 = strlen(b1);
+    if(len2 < 0) len2 = strlen(b2);
+
+    unsigned char *sp  = (unsigned char *) b1;
+    unsigned char *pp  = (unsigned char *) b2;
+    unsigned char *eos = sp + len1 - len2;
+
+    if(!(b1 && b2 && len1 && len2))
+        return NULL;
+
+    while (sp <= eos) {
+        if (*sp == *pp)
+            if (mymemicmp(sp, pp, len2) == 0)
+                return sp;
+        sp++;
+    }
+    return NULL;
+}
+
+
+
+void *mymemrmem(const void *b1, const void *b2, i32 len1, i32 len2) {
+    void    *p,
+            *last;
+
+    if(!b1 || !b2) return NULL;
+    last = NULL;
+    for(p = (void *)b1; p = mymemmem(p, b2, len1 - (p - b1), len2); p = (void *)((unsigned char *)p + len2)) {
+        last = p;
+    }
+    return last;
 }
 
 
@@ -3020,24 +3590,18 @@ void dump_cmdline(int argc, char **argv) {
 
 
 
-void *malloc_copy(void *output, void *input, int size) {
+void *malloc_copy(void **output, void *input, int size) {
     void    *ret;
 
     if(!input || (size < 0)) return NULL;
     MAX_ALLOC_CHECK(size);
-    ret = realloc(output, size + 1);    // works if both output exists or is NULL
+    ret = realloc(output ? *output : NULL, size + 1);
     if(!ret) STD_ERR(QUICKBMS_ERROR_MEMORY);
+    if(output) *output = ret;
     if(input) memcpy(ret, input, size);
     else      memset(ret, 0x00,  size);
     ((u8 *)ret)[size] = 0;
     return ret;
-}
-
-
-
-int malloc_copy2(void **output, void *input, int size) {
-    if(output) *output = malloc_copy(*output, input, size);
-    return size;
 }
 
 
@@ -3115,7 +3679,6 @@ static PVOID WINAPI (*_AddVectoredContinueHandler)(ULONG FirstHandler, PVECTORED
 static PVOID WINAPI (*_AddVectoredExceptionHandler)(ULONG FirstHandler, PVECTORED_EXCEPTION_HANDLER VectoredHandler) = NULL;
 int winapi_missing(void) {
     static HMODULE kernel32 = NULL;
-
     if(!kernel32) kernel32 = GetModuleHandle("kernel32.dll");   // LoadLibrary may be dangerous
     if(kernel32) {
         if(!_AddVectoredContinueHandler)
@@ -3243,7 +3806,11 @@ u8 *clean_filename(u8 *fname, int *wildcard_extension) {
     if(wildcard_extension) {
         *wildcard_extension = -1;
         ext = strrchr(fname, '.');
-        if(ext && (!ext[1] || ext[1] == '*')) if(*wildcard_extension < 0) *wildcard_extension = ext - fname;
+        if(ext && (!ext[1] || ext[1] == '*')) {
+            if(*wildcard_extension < 0) {
+                *wildcard_extension = ext - fname;
+            }
+        }
         ext = strrchr(fname, '*');
         if(ext && !ext[1]) {
             if(*wildcard_extension < 0) {
@@ -3268,15 +3835,6 @@ u8 *clean_filename(u8 *fname, int *wildcard_extension) {
     }
     *p = 0;
 
-    // remove final spaces and dots
-    for(p = fname + strlen(fname); p >= fname; p--) {
-        if(!strchr(clean_filename_chars, *p)) {
-            if((*p != ' ') && (*p != '.')) break;
-        }
-        *p = 0;
-    }
-    wild_ext = p + 1;
-
     // remove spaces at the end of the folders (they are not supported by some OS)
     for(p = fname; *p; p = l + 1) {
         l = mystrchrs(p, PATH_DELIMITERS);
@@ -3289,8 +3847,19 @@ u8 *clean_filename(u8 *fname, int *wildcard_extension) {
         l = s;
     }
 
+    // remove final spaces and dots
+    for(p = fname + strlen(fname); p >= fname; p--) {
+        if(!strchr(clean_filename_chars, *p)) {
+            if((*p != ' ') && (*p != '.')) break;
+        }
+        *p = 0;
+    }
+    wild_ext = p + 1;
+
     if(wildcard_extension && (*wildcard_extension >= 0)) {
-        if(*wildcard_extension > (wild_ext - fname)) *wildcard_extension = wild_ext - fname;
+        if(*wildcard_extension > (wild_ext - fname)) {
+            *wildcard_extension = wild_ext - fname;
+        }
     }
     return(fname);
 }
@@ -3315,7 +3884,65 @@ int debug_privileges(void)  {
 
 
 
+void get_temp_path(u8 *output, int outputsz) {
+    u8      *p;
+
+    output[0] = 0;
+#ifdef WIN32
+    static DWORD WINAPI (*_GetTempPathW)(DWORD nBufferLength, LPWSTR lpBuffer) = NULL;
+    if(!_GetTempPathW) {
+        _GetTempPathW = (void *)GetProcAddress(GetModuleHandle("kernel32.dll"), "GetTempPathW");
+    }
+    if(_GetTempPathW) {
+        wchar_t *outputW = (wchar_t *)calloc(outputsz + 1, sizeof(wchar_t));
+        if(!outputW) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        outputW[0] = 0;
+        _GetTempPathW(outputsz, outputW);
+        mystrcpy(output, native_unicode_to_utf8(outputW), outputsz);
+        FREE(outputW)
+    } else {
+        GetTempPath(outputsz, output);
+    }
+#endif
+    if(!output[0]) {
+        p = getenv ("TMP");
+        if(!p) p = getenv ("TEMP");
+        if(!p) p = getenv ("TMPDIR");
+        if(!p) p = getenv ("TEMPDIR");
+#ifdef WIN32
+        if(!p) {
+            p = getenv ("LOCALAPPDATA");
+            if(p) p = spr2("%s\\%s", p, "temp");
+        }
+        if(!p) {
+            p = getenv ("USERPROFILE");
+            if(p) p = spr2("%s\\%s", p, "AppData\\Local\\Temp");
+        }
+        if(!p) {
+            p = getenv ("WINDIR");
+            if(p) p = spr2("%s\\%s", p, "temp");
+        }
+        if(!p) p = "c:\\windows\\temp"; // it's wrong but it should never happen
+#else
+        if(!p) p = "/tmp";
+#endif
+        mystrcpy(output, p, outputsz);
+
+        // TMP="z:\new temp folder\aaa bbb ccc"
+        while(*p && ((*p <= ' ') || (*p == '\"'))) p++;
+        if(*p) {
+            mymemmove(output, p, -1);
+            for(p = output + strlen(output) - 1; (p >= output) && ((*p <= ' ') || (*p == '\"')); p--);
+            *p = 0;
+        }
+    }
+}
+
+
+
 int need_quote_delimiters(u8 *p) {
+    if(!p || !p[0]) return 1;            // ""
+    if(p[0] == '\"') return 0;  // already quoted
     if(mystrchrs(p,
         "^&|<>() \t,;=\xff%"
     )) return 1;
@@ -3329,8 +3956,8 @@ int need_quote_delimiters(u8 *p) {
             p = fname; \
             if(files) p = g_file_folder; \
             for(i = 0;; i++) { \
-                if(!i) sprintf(iso_fname, "%.*s.%s",    sizeof(iso_fname) - 20, get_filename(p), #X); \
-                else   sprintf(iso_fname, "%.*s_%d.%s", sizeof(iso_fname) - 20, get_filename(p), (i32)i, #X); \
+                if(!i) sprintf(iso_fname, "%.*s.%s",    (i32)(sizeof(iso_fname) - 20), get_filename(p), #X); \
+                else   sprintf(iso_fname, "%.*s_%d.%s", (i32)(sizeof(iso_fname) - 20), get_filename(p), (i32)i, #X); \
                 printf("- generating %s %s in the output folder\n", #X, iso_fname); \
                 t = check_overwrite(iso_fname, 0); \
                 if(!t) break; \
@@ -3384,6 +4011,320 @@ TCCState *tcc_compiler(u8 *input) {
     tcc_set_options(tccstate, "-nostdlib");
     if(tcc_compile_string(tccstate, input) < 0) myexit(QUICKBMS_ERROR_BMS);
     return tccstate;
+}
+
+
+
+long long __divdi3(long long u, long long v);
+long long __moddi3(long long u, long long v);
+unsigned long long __udivdi3(unsigned long long u, unsigned long long v);
+unsigned long long __umoddi3(unsigned long long u, unsigned long long v);
+long long __ashrdi3(long long a, int b);
+unsigned long long __lshrdi3(unsigned long long a, int b);
+long long __ashldi3(long long a, int b);
+float __floatundisf(unsigned long long a);
+double __floatundidf(unsigned long long a);
+long double __floatundixf(unsigned long long a);
+unsigned long long __fixunssfdi (float a1);
+long long __fixsfdi (float a1);
+unsigned long long __fixunsdfdi (double a1);
+long long __fixdfdi (double a1);
+unsigned long long __fixunsxfdi (long double a1);
+long long __fixxfdi (long double a1);
+
+
+
+int TCC_libtcc_symbols(TCCState *tccstate) {
+    #define tcc_symbols_add(X)  tcc_add_symbol(tccstate, #X, X)
+
+    //stdio.h
+    tcc_symbols_add(fopen);
+    tcc_symbols_add(freopen);
+    tcc_symbols_add(fflush);
+    tcc_symbols_add(fclose);
+    //tcc_symbols_add(remove);
+    //tcc_symbols_add(rename);
+    //tcc_symbols_add(tmpfile);
+    //tcc_symbols_add(tempnam);
+    //tcc_symbols_add(rmtmp);
+    //tcc_symbols_add(unlink);
+    tcc_symbols_add(fprintf);
+    tcc_symbols_add(printf);
+    tcc_symbols_add(sprintf);
+    tcc_symbols_add(vfprintf);
+    tcc_symbols_add(vprintf);
+    tcc_symbols_add(vsprintf);
+    tcc_symbols_add(fscanf);
+    tcc_symbols_add(scanf);
+    tcc_symbols_add(sscanf);
+    tcc_symbols_add(fgetc);
+    tcc_symbols_add(fgets);
+    tcc_symbols_add(fputc);
+    tcc_symbols_add(fputs);
+    //tcc_symbols_add(gets);
+    tcc_symbols_add(puts);
+    tcc_symbols_add(ungetc);
+    tcc_symbols_add(getc);
+    tcc_symbols_add(putc);
+    tcc_symbols_add(getchar);
+    tcc_symbols_add(putchar);
+    tcc_symbols_add(fread);
+    tcc_symbols_add(fwrite);
+    tcc_symbols_add(fseek);
+    tcc_symbols_add(ftell);
+    tcc_symbols_add(rewind);
+    tcc_symbols_add(fgetpos);
+    tcc_symbols_add(fsetpos);
+    tcc_symbols_add(feof);
+    tcc_symbols_add(ferror);
+
+    //stdlib.h
+    tcc_symbols_add(atoi);
+    tcc_symbols_add(atof);
+    tcc_add_symbol(tccstate, "malloc",  real_malloc);   //tcc_symbols_add(malloc);
+    tcc_add_symbol(tccstate, "calloc",  real_calloc);   //tcc_symbols_add(calloc);
+    tcc_add_symbol(tccstate, "realloc", real_realloc);  //tcc_symbols_add(realloc);
+    tcc_add_symbol(tccstate, "free",    real_free);     //tcc_symbols_add(free);
+    //tcc_symbols_add(alloca);
+    //tcc_symbols_add(itoa);
+    tcc_symbols_add(exit);
+    tcc_symbols_add(bsearch);
+    tcc_symbols_add(qsort);
+    tcc_symbols_add(div);
+    tcc_symbols_add(abs);
+
+    //string.h
+    tcc_symbols_add(memchr);
+    tcc_symbols_add(memcmp);
+    tcc_symbols_add(memcpy);
+    tcc_symbols_add(memmove);
+    tcc_symbols_add(memset);
+    tcc_symbols_add(strcat);
+    tcc_symbols_add(strchr);
+    tcc_symbols_add(strcmp);
+    tcc_symbols_add(strcoll);
+    tcc_symbols_add(strcpy);
+    tcc_symbols_add(strcspn);
+    tcc_symbols_add(strerror);
+    tcc_symbols_add(strlen);
+    tcc_symbols_add(strncat);
+    tcc_symbols_add(strncmp);
+    tcc_symbols_add(strncpy);
+    tcc_symbols_add(strpbrk);
+    tcc_symbols_add(strrchr);
+    tcc_symbols_add(strspn);
+    tcc_symbols_add(strstr);
+    tcc_symbols_add(stristr);
+    tcc_symbols_add(strtok);
+    tcc_symbols_add(strxfrm);
+    tcc_symbols_add(memccpy);
+    tcc_symbols_add(memicmp);
+    tcc_add_symbol(tccstate, "strdup",  real_strdup);   //tcc_symbols_add(strdup);
+    //tcc_symbols_add(strcmpi);
+    tcc_symbols_add(stricmp);
+    //tcc_symbols_add(stricoll);    // not available on newer gcc
+    //tcc_symbols_add(strlwr);
+    tcc_symbols_add(strnicmp);
+    //tcc_symbols_add(strnset);
+    //tcc_symbols_add(strrev);
+    //tcc_symbols_add(strset);
+    //tcc_symbols_add(strupr);
+
+    //math.h
+    tcc_symbols_add(sin);
+    tcc_symbols_add(cos);
+    tcc_symbols_add(tan);
+    tcc_symbols_add(sinh);
+    tcc_symbols_add(cosh);
+    tcc_symbols_add(tanh);
+    tcc_symbols_add(asin);
+    tcc_symbols_add(acos);
+    tcc_symbols_add(atan);
+    tcc_symbols_add(atan2);
+    tcc_symbols_add(exp);
+    tcc_symbols_add(log);
+    tcc_symbols_add(log10);
+    tcc_symbols_add(pow);
+    tcc_symbols_add(sqrt);
+    tcc_symbols_add(ceil);
+    tcc_symbols_add(floor);
+    tcc_symbols_add(fabs);
+    tcc_symbols_add(ldexp);
+    tcc_symbols_add(frexp);
+    tcc_symbols_add(modf);
+    tcc_symbols_add(fmod);
+
+    //ctype.h
+    tcc_symbols_add(isalnum);
+    tcc_symbols_add(isalpha);
+    tcc_symbols_add(iscntrl);
+    tcc_symbols_add(isdigit);
+    tcc_symbols_add(isgraph);
+    tcc_symbols_add(islower);
+    //tcc_symbols_add(isleadbyte);
+    tcc_symbols_add(isprint);
+    tcc_symbols_add(ispunct);
+    tcc_symbols_add(isspace);
+    tcc_symbols_add(isupper);
+    tcc_symbols_add(isxdigit);
+    tcc_symbols_add(tolower);
+    tcc_symbols_add(toupper);
+
+    //time.h
+    tcc_symbols_add(time);
+    tcc_symbols_add(difftime);
+    tcc_symbols_add(mktime);
+    tcc_symbols_add(asctime);
+    tcc_symbols_add(ctime);
+    tcc_symbols_add(gmtime);
+    tcc_symbols_add(localtime);
+
+#ifdef WIN32
+    //windows.h/winbase.h
+    tcc_symbols_add(LoadLibraryA);
+    tcc_symbols_add(LoadLibraryExA);
+    tcc_symbols_add(GetProcAddress);
+    tcc_symbols_add(FreeLibrary);
+    tcc_symbols_add(FindResourceA);
+    tcc_symbols_add(GetModuleHandleA);
+    //tcc_symbols_add(GetModuleHandleExA);  // not available on Win98
+#endif
+
+    //quickbms
+    tcc_symbols_add(strristr);
+    tcc_symbols_add(swap16);
+    tcc_symbols_add(swap32);
+    tcc_symbols_add(spr2);
+    tcc_symbols_add(rol);
+    tcc_symbols_add(ror);
+    tcc_symbols_add(mycrc);
+    tcc_symbols_add(mytolower);
+    tcc_symbols_add(mytoupper);
+
+    // libtcc.a
+    tcc_symbols_add(__ashldi3);
+    tcc_symbols_add(__ashrdi3);
+    tcc_symbols_add(__divdi3);
+    #if defined(i386) // got a warning on MacOS but still working
+    tcc_symbols_add(__fixdfdi);
+    tcc_symbols_add(__fixsfdi);
+    tcc_symbols_add(__fixunsdfdi);
+    tcc_symbols_add(__fixunssfdi);
+    tcc_symbols_add(__fixunsxfdi);
+    tcc_symbols_add(__fixxfdi);
+    tcc_symbols_add(__floatundidf);
+    tcc_symbols_add(__floatundisf);
+    tcc_symbols_add(__floatundixf);
+    #endif
+    tcc_symbols_add(__lshrdi3);
+    tcc_symbols_add(__moddi3);
+    tcc_symbols_add(__udivdi3);
+    //tcc_symbols_add(__udivmoddi4);
+    tcc_symbols_add(__umoddi3);
+
+    /*
+    tcc_symbols_add(__getmainargs);
+    tcc_symbols_add(__set_app_type);
+    tcc_symbols_add(__try__);
+    tcc_symbols_add(_controlfp);
+    tcc_symbols_add(_dowildcard);
+    tcc_symbols_add(_imp____argc);
+    tcc_symbols_add(_imp____argv);
+    tcc_symbols_add(_imp___environ);
+    tcc_symbols_add(_runmain);
+    tcc_symbols_add(_start);
+    tcc_symbols_add(__wgetmainargs);
+    tcc_symbols_add(_imp____wargv);
+    tcc_symbols_add(_imp___wenviron);
+    tcc_symbols_add(_runwmain);
+    tcc_symbols_add(_wstart);
+    tcc_symbols_add(_GetCommandLineA@0);
+    tcc_symbols_add(_GetModuleHandleA@4);
+    tcc_symbols_add(_GetStartupInfoA@4);
+    tcc_symbols_add(_runwinmain);
+    tcc_symbols_add(_strdup);
+    tcc_symbols_add(_WinMain@16);
+    tcc_symbols_add(_winstart);
+    tcc_symbols_add(strstr);
+    tcc_symbols_add(_GetCommandLineW@0);
+    tcc_symbols_add(_GetModuleHandleW@4);
+    tcc_symbols_add(_GetStartupInfoW@4);
+    tcc_symbols_add(_runwwinmain);
+    tcc_symbols_add(_wcsdup);
+    tcc_symbols_add(_wWinMain@16);
+    tcc_symbols_add(_wwinstart);
+    tcc_symbols_add(wcsstr);
+    tcc_symbols_add(___try__);
+    tcc_symbols_add(__chkstk);
+    tcc_symbols_add(_except_handler3);
+    tcc_symbols_add(_exception_code);
+    tcc_symbols_add(_exception_info);
+    tcc_symbols_add(_exit);
+    tcc_symbols_add(_XcptFilter);
+    tcc_symbols_add(seh_except);
+    tcc_symbols_add(seh_filter);
+    tcc_symbols_add(seh_handler);
+    tcc_symbols_add(seh_scopetable);
+    tcc_symbols_add(__bound_calloc);
+    tcc_symbols_add(__bound_check);
+    tcc_symbols_add(__bound_delete_region);
+    tcc_symbols_add(__bound_empty_t2);
+    tcc_symbols_add(__bound_error_msg);
+    tcc_symbols_add(__bound_exit);
+    tcc_symbols_add(__bound_find_region);
+    tcc_symbols_add(__bound_free);
+    tcc_symbols_add(__bound_init);
+    tcc_symbols_add(__bound_invalid_t2);
+    tcc_symbols_add(__bound_local_delete);
+    tcc_symbols_add(__bound_local_new);
+    tcc_symbols_add(__bound_main_arg);
+    tcc_symbols_add(__bound_malloc);
+    tcc_symbols_add(__bound_memalign);
+    tcc_symbols_add(__bound_memcpy);
+    tcc_symbols_add(__bound_memmove);
+    tcc_symbols_add(__bound_memset);
+    tcc_symbols_add(__bound_new_page);
+    tcc_symbols_add(__bound_new_region);
+    tcc_symbols_add(__bound_ptr_add);
+    tcc_symbols_add(__bound_ptr_indir1);
+    tcc_symbols_add(__bound_ptr_indir12);
+    tcc_symbols_add(__bound_ptr_indir16);
+    tcc_symbols_add(__bound_ptr_indir2);
+    tcc_symbols_add(__bound_ptr_indir4);
+    tcc_symbols_add(__bound_ptr_indir8);
+    tcc_symbols_add(__bound_realloc);
+    tcc_symbols_add(__bound_strcpy);
+    tcc_symbols_add(__bound_strlen);
+    tcc_symbols_add(__bound_t1);
+    tcc_symbols_add(__bounds_start);
+    tcc_symbols_add(_imp___iob);
+    tcc_symbols_add(add_region);
+    tcc_symbols_add(bound_alloc_error);
+    tcc_symbols_add(bound_error);
+    tcc_symbols_add(bound_free_entry);
+    tcc_symbols_add(bound_new_entry);
+    tcc_symbols_add(delete_region);
+    tcc_symbols_add(fprintf);
+    tcc_symbols_add(free);
+    tcc_symbols_add(get_page);
+    tcc_symbols_add(get_region_size);
+    tcc_symbols_add(inited);
+    tcc_symbols_add(install_malloc_hooks);
+    tcc_symbols_add(libc_free);
+    tcc_symbols_add(libc_malloc);
+    //tcc_symbols_add(malloc);
+    tcc_symbols_add(mark_invalid);
+    tcc_symbols_add(memcpy);
+    tcc_symbols_add(memmove);
+    tcc_symbols_add(memset);
+    tcc_symbols_add(restore_malloc_hooks);
+    tcc_symbols_add(alloca);
+    tcc_symbols_add(__bound_alloca);
+    tcc_symbols_add(__bound_new_region);
+    tcc_symbols_add(exit);
+    */
+
+    return 0;
 }
 
 
@@ -3759,7 +4700,8 @@ int de_html(u8 *in, int insz, u8 *out, int outsz) {
     u8      *inl,
             *outl,
             *p,
-            *s;
+            *s,
+            *last_p;
 
     if(insz  < 0) insz  = strlen(in);
     if(outsz < 0) outsz = insz; // who cares
@@ -3771,6 +4713,7 @@ int de_html(u8 *in, int insz, u8 *out, int outsz) {
         if(!strnicmp(p, "<br>", 4) || !strnicmp(p, "</br>", 5) || !strnicmp(p, "<br/>", 5)) {
             s = de_html_putc(out, s, '\n');
             p = strchr(p, '>') + 1;
+            //if(!p) break;
         } else if(*p == '<') {
             p++;
             if(skip) skip = 0;
@@ -3783,7 +4726,9 @@ int de_html(u8 *in, int insz, u8 *out, int outsz) {
         } else if(skip) {
             p++;
         } else {
+            last_p = p;
             s = de_html_putc(out, s, html_to_text(p, &p));
+            if(p == last_p) p++;    // it happens with NUL bytes
         }
     }
     *s = 0;
@@ -3801,7 +4746,8 @@ int html_easy(u8 *in, int insz, u8 *out, int outsz) {
     u8      *inl,
             *outl,
             *p,
-            *s;
+            *s,
+            *last_p;
 
     if(insz  < 0) insz  = strlen(in);
     if(outsz < 0) outsz = insz; // who cares
@@ -3817,7 +4763,9 @@ int html_easy(u8 *in, int insz, u8 *out, int outsz) {
         if(t == '<') s = de_html_putc(out, s, '\n');
 
         if(s >= outl) break;
+        last_p = p;
         s = de_html_putc(out, s, html_to_text(p, &p));  // p is incremented here!
+        if(p == last_p) p++;    // it happens with NUL bytes
 
         if(s >= outl) break;
         if(t == '>') s = de_html_putc(out, s, '\n');
@@ -4033,9 +4981,88 @@ void xml_json_parser_free(xml_json_parser_ctx_t *ctx) {
 
 
 
-QUICKBMS_int get_var_from_name(u8 *name, QUICKBMS_int namelen);
-QUICKBMS_int get_var32(QUICKBMS_int idx);
-int add_var(int idx, u8 *name, u8 *val, int val32, int valsz);
+static xml_json_parser_names_t *xml_json_parser_names(xml_json_parser_names_t **X, u8 *Y, int *ret_next) {
+    xml_json_parser_names_t *ef;
+    u32     crc;
+
+    if(ret_next) *ret_next = -1;
+    crc = mycrc(Y, -1);
+    HASH_FIND_INT(*X, &crc, ef);
+    if(!ef) {
+        ef = real_calloc(1, sizeof(xml_json_parser_names_t));
+        if(!ef) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        ef->crc = crc;
+        ef->num = 1;
+        HASH_ADD_INT(*X, crc, ef);
+    } else {
+        if(ret_next) *ret_next = 0;
+    }
+    return ef;
+}
+
+
+
+// there is no real improvement so keep it off
+//#define xml_json_parser_names_var_optimization  1
+
+
+
+static void xml_json_parser_names_var(int i_idx, u8 *Y, u8 *Z) {
+    xml_json_parser_names_t *ef;
+
+    if(!Y) return;
+    // in theory Z can be NULL if we are adding a tag
+
+    ef = xml_json_parser_names(&g_xml_json_parser_names_var, Y, NULL);
+
+#ifdef xml_json_parser_names_var_optimization
+    // ef->num can't be zero, first element is 1 (going to index 0)
+    if(ef->num > 1)
+#endif
+    {
+        int     idx;
+        int     Ysz = strlen(Y);
+        u8      *name_tmp = alloca(Ysz + 3 + 1);    // alloca is on the stack
+        if(!name_tmp) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        memcpy(name_tmp, Y, Ysz);
+
+        // we need to initialize the variable first if not existent, this is a "core thing" of quickbms
+        // (in short if you just use 'print "%VAR[i]%"' it fails because VAR[i] must be used somewhere first)
+        strcpy(name_tmp + Ysz, "[i]");
+        idx = get_var_from_name(name_tmp, -1);
+        if(idx < 0) idx = add_var(0, name_tmp, NULL, 0, -2);    // -2 is the magic value for initialization like in bms.c
+
+#ifdef xml_json_parser_names_var_optimization
+        // this work-around creates a VAR[0] variable by copying the content of the last VAR variable
+        // the idea is using "String X" even for many one-line instructions without creating arrays
+        if(ef->num == 2) {
+            // VAR[0]
+            add_var(i_idx, NULL, NULL, 0, sizeof(int));
+
+            // VAR[0] = VAR
+            add_var(idx, NULL, get_var(get_var_from_name(Y, -1)), 0, -1);
+        }
+#endif
+
+        // VAR[i]
+        add_var(i_idx, NULL, NULL, ef->num - 1, sizeof(int));
+
+        // VAR[i] = value
+        add_var(idx, NULL, Z, 0, -1);
+
+        // VAR[] = elements
+        strcpy(name_tmp + Ysz, "[]");
+        add_var(0, name_tmp, NULL, ef->num,     sizeof(int));
+    }
+
+    // VAR = value
+    add_var(0, Y, Z, 0, -1);
+
+    if(Z) ef->num++;
+}
+
+
+
 u8 *xml_json_parser(u8 *buff, u8 *limit, int start, int end, int level, xml_json_parser_ctx_t *ctx, u8 *key) {
     /*
     "var"           content (fail-safe)
@@ -4047,50 +5074,20 @@ u8 *xml_json_parser(u8 *buff, u8 *limit, int start, int end, int level, xml_json
     next i
     */
 
-    #define xml_json_parser_names(X,Y) \
-        crc = mycrc(Y, -1); \
-        HASH_FIND_INT(X, &crc, ef); \
-        if(!ef) { \
-            ef = real_calloc(1, sizeof(xml_json_parser_names_t)); \
-            if(!ef) STD_ERR(QUICKBMS_ERROR_MEMORY); \
-            ef->crc = crc; \
-            ef->num = 1; \
-            HASH_ADD_INT(X, crc, ef); \
-            ef_next = NULL; \
-        } else { \
-            ef_next = ef; \
-        }
-    #define xml_json_parser_names_var(Y,Z) \
-        xml_json_parser_names(g_xml_json_parser_names_var, Y) \
-        \
-        add_var(i_idx, NULL, NULL, ef->num - 1, sizeof(int)); \
-        spr(&name_tmp, "%s[i]", Y); \
-        add_var(0, name_tmp, Z, 0, -1); \
-        \
-        spr(&name_tmp, "%s[]", Y); \
-        add_var(0, name_tmp, NULL, ef->num,     sizeof(int)); \
-        \
-        add_var(0, Y, Z, 0, -1); \
-        \
-        if(Z) ef->num++;
-
     static const u8 escapes[] = "<>{}[]()\"\'`:=;&?|!,/";
     int     elements    = 0,
             strsz       = 0,
-            c;
+            c,
+            t;
     u8      *p          = NULL,
             *str        = NULL,
-            *last_p     = NULL,
-            *name_tmp   = NULL;
+            *last_p     = NULL;
 
     // long story short: currently the multi-dimensional array work in a weird way where var[i] and var[0] are 2 different things
     int     bck_level   = level;
     int     i_idx       = get_var_from_name("i", -1);
     if(i_idx < 0) i_idx = add_var(0, "i", NULL, 0, sizeof(int));
-    int     i_bck       =  get_var32(i_idx);
-    xml_json_parser_names_t *ef         = NULL,
-                            *ef_next    = NULL;
-    u32     crc;
+    int     i_bck       = get_var32(i_idx);
 
     if(!ctx) goto quit;
     if(!buff) goto quit;
@@ -4170,6 +5167,7 @@ u8 *xml_json_parser(u8 *buff, u8 *limit, int start, int end, int level, xml_json
 
         if(strsz >= 0) {
             html_to_text(str, NULL);
+            cstring(str, str, -1, NULL, NULL);  // html_text removes the non-text chars (like line-feed)
             quick_utf8_to_ascii(str);
             if(level < 0) level = 0;
             if(!ctx->pv) {
@@ -4184,7 +5182,7 @@ u8 *xml_json_parser(u8 *buff, u8 *limit, int start, int end, int level, xml_json
             if(ctx->tagi == 2) {
                 ctx->tagi = 3;
                 if(ctx->tag && ctx->tag[0]) {
-                    xml_json_parser_names_var(ctx->tag, str)
+                    xml_json_parser_names_var(i_idx, ctx->tag, str);
                     FREE(ctx->tag)
                     FREE(ctx->par)  // avoid duplicates
                 }
@@ -4192,12 +5190,14 @@ u8 *xml_json_parser(u8 *buff, u8 *limit, int start, int end, int level, xml_json
             if(ctx->tagi >= 4) {
                 ctx->tagi = 0;
             } else {
-                if(ctx->par && ctx->par[0]) {   // necessary also due to some tag bug
-                    xml_json_parser_names_var(ctx->par, ctx->val)
+                if(ctx->pv &&   // added in Quickbms 0.11
+                    (ctx->par && ctx->par[0])   // necessary also due to some tag bug
+                ) {
+                    xml_json_parser_names_var(i_idx, ctx->par, ctx->val);
 
                     if(!ctx->pv) {
-                        xml_json_parser_names(g_xml_json_parser_names_list, str)
-                        if(!ef_next) {
+                        xml_json_parser_names(&g_xml_json_parser_names_list, str, &t);
+                        if(t < 0) {
                             if(!ctx->names) mystrdup(&ctx->names, ",");
                             int t = strlen(str);    // the previous functions changed the length of str
                             ctx->names = realloc(ctx->names, strlen(ctx->names) + t + 1 + 1);
@@ -4225,6 +5225,8 @@ u8 *xml_json_parser(u8 *buff, u8 *limit, int start, int end, int level, xml_json
     }
 quit:
     if(bck_level < 0) {
+        xml_json_parser_names_t *ef         = NULL,
+                                *ef_next    = NULL;
         HASH_ITER(hh, g_xml_json_parser_names_var, ef, ef_next) {
             HASH_DEL(g_xml_json_parser_names_var, ef);
             real_free(ef);
@@ -4236,7 +5238,6 @@ quit:
     }
     add_var(i_idx, NULL, NULL, i_bck, sizeof(int));
     FREE(str)
-    FREE(name_tmp)
     return p;
 }
 

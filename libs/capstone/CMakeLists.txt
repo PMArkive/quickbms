@@ -3,7 +3,7 @@ project(capstone)
 
 set(VERSION_MAJOR 4)
 set(VERSION_MINOR 0)
-set(VERSION_PATCH 1)
+set(VERSION_PATCH 2)
 
 if(POLICY CMP0042)
   # http://www.cmake.org/cmake/help/v3.0/policy/CMP0042.html
@@ -27,6 +27,7 @@ option(CAPSTONE_BUILD_DIET "Build diet library" OFF)
 option(CAPSTONE_BUILD_TESTS "Build tests" ON)
 option(CAPSTONE_BUILD_CSTOOL "Build cstool" ON)
 option(CAPSTONE_USE_DEFAULT_ALLOC "Use default memory allocation functions" ON)
+option(CAPSTONE_ARCHITECTURE_DEFAULT "Whether architectures are enabled by default" ON)
 
 set(SUPPORTED_ARCHITECTURES ARM ARM64 M68K MIPS PPC SPARC SYSZ XCORE X86 TMS320C64X M680X EVM)
 set(SUPPORTED_ARCHITECTURE_LABELS ARM ARM64 M68K MIPS PowerPC Sparc SystemZ XCore x86 TMS320C64x M680x EVM)
@@ -37,7 +38,7 @@ math(EXPR count "${count}-1")
 foreach(i RANGE ${count})
   list(GET SUPPORTED_ARCHITECTURES ${i} supported_architecture)
   list(GET SUPPORTED_ARCHITECTURE_LABELS ${i} supported_architecture_label)
-  option("CAPSTONE_${supported_architecture}_SUPPORT" "${supported_architecture_label} support" ON)
+  option("CAPSTONE_${supported_architecture}_SUPPORT" "${supported_architecture_label} support" ${CAPSTONE_ARCHITECTURE_DEFAULT})
 endforeach(i)
 
 # propagate architecture support variables to preprocessor
@@ -272,38 +273,21 @@ if (CAPSTONE_X86_SUPPORT)
         arch/X86/X86Disassembler.h
         arch/X86/X86DisassemblerDecoder.h
         arch/X86/X86DisassemblerDecoderCommon.h
+        arch/X86/X86InstPrinter.h
+        arch/X86/X86Mapping.h
         arch/X86/X86GenAsmWriter.inc
+        arch/X86/X86GenAsmWriter_reduce.inc
         arch/X86/X86GenAsmWriter1.inc
         arch/X86/X86GenAsmWriter1_reduce.inc
-        arch/X86/X86GenAsmWriter_reduce.inc
         arch/X86/X86GenDisassemblerTables.inc
         arch/X86/X86GenDisassemblerTables_reduce.inc
         arch/X86/X86GenInstrInfo.inc
         arch/X86/X86GenInstrInfo_reduce.inc
         arch/X86/X86GenRegisterInfo.inc
-        arch/X86/X86InstPrinter.h
-        arch/X86/X86Mapping.h
         arch/X86/X86MappingInsn.inc
+        arch/X86/X86MappingInsn_reduce.inc
         arch/X86/X86MappingInsnOp.inc
         arch/X86/X86MappingInsnOp_reduce.inc
-        arch/X86/X86MappingInsn_reduce.inc
-        )
-    set(HEADERS_X86
-        arch/X86/X86BaseInfo.h
-        arch/X86/X86Disassembler.h
-        arch/X86/X86DisassemblerDecoder.h
-        arch/X86/X86DisassemblerDecoderCommon.h
-        arch/X86/X86GenAsmWriter.inc
-        arch/X86/X86GenAsmWriter1.inc
-        arch/X86/X86GenAsmWriter1_reduce.inc
-        arch/X86/X86GenAsmWriter_reduce.inc
-        arch/X86/X86GenDisassemblerTables.inc
-        arch/X86/X86GenDisassemblerTables_reduce.inc
-        arch/X86/X86GenInstrInfo.inc
-        arch/X86/X86GenInstrInfo_reduce.inc
-        arch/X86/X86GenRegisterInfo.inc
-        arch/X86/X86InstPrinter.h
-        arch/X86/X86Mapping.h
         )
     if (NOT CAPSTONE_BUILD_DIET)
         set(SOURCES_X86 ${SOURCES_X86} arch/X86/X86ATTInstPrinter.c)
@@ -576,33 +560,24 @@ source_group("Include\\M680X" FILES ${HEADERS_MC680X})
 source_group("Include\\EVM" FILES ${HEADERS_EVM})
 
 ### test library 64bit routine:
-get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
-
-if (NOT APPLE AND "${LIB64}" STREQUAL "TRUE")
-    set(LIBSUFFIX 64)
-else()
-    set(LIBSUFFIX "")
-endif()
-
-set(INSTALL_LIB_DIR     lib${LIBSUFFIX} CACHE PATH "Installation directory for libraries")
-mark_as_advanced(INSTALL_LIB_DIR)
+include("GNUInstallDirs")
 
 ## installation
-install(FILES ${HEADERS_COMMON} DESTINATION include/capstone)
+install(FILES ${HEADERS_COMMON} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/capstone)
 configure_file(capstone.pc.in ${CMAKE_BINARY_DIR}/capstone.pc @ONLY)
 
 if (CAPSTONE_BUILD_STATIC)
     install(TARGETS capstone-static
             RUNTIME DESTINATION bin
-            LIBRARY DESTINATION ${INSTALL_LIB_DIR}
-            ARCHIVE DESTINATION ${INSTALL_LIB_DIR})
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif ()
 
 if (CAPSTONE_BUILD_SHARED)
     install(TARGETS capstone-shared
             RUNTIME DESTINATION bin
-            LIBRARY DESTINATION ${INSTALL_LIB_DIR}
-            ARCHIVE DESTINATION ${INSTALL_LIB_DIR})
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif ()
 
 if (CAPSTONE_BUILD_SHARED AND CAPSTONE_BUILD_CSTOOL)
@@ -611,5 +586,5 @@ add_executable(cstool ${CSTOOL_SRC})
 target_link_libraries(cstool ${default-target})
 
 install(TARGETS cstool DESTINATION bin)
-install(FILES ${CMAKE_BINARY_DIR}/capstone.pc DESTINATION lib/pkgconfig)
+install(FILES ${CMAKE_BINARY_DIR}/capstone.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 endif ()

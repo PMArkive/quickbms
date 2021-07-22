@@ -1,7 +1,8 @@
 // modified by Luigi Auriemma
-// LZ4X >= v1.50
+// LZ4X >= v1.50 (this is v1.60)
 // lz4x.c is left as-is because it contains a customization
 // working on a specific game and still keeping it compatible
+// update: the customization has been added to this code too (decompress: s < 0)
 // memory static->alloc
 
 /*
@@ -18,18 +19,16 @@ Written and placed in the public domain by Ilya Muravyov
 
 
 
-int lz4x_new(unsigned char *g_in, int flen, unsigned char *g_out, int dec_enc) {
-
-    unsigned char *g_in_bck = g_in;
-    unsigned char *g_out_bck = g_out;
-    int myfread(void *t, int elsz, int tsz, unsigned char *dummy2) {
+    static unsigned char *g_in_bck, *g_in, *g_out;
+    static int flen;
+    static int myfread(void *t, int elsz, int tsz, unsigned char *dummy2) {
         tsz *= elsz;
         if(tsz > ((g_in_bck + flen) - g_in)) tsz = ((g_in_bck + flen) - g_in);
         memcpy(t, g_in, tsz);
         g_in += tsz;
         return tsz;
     }
-    int myfwrite(void *t, int elsz, int tsz, unsigned char *dummy2) {
+    static int myfwrite(void *t, int elsz, int tsz, unsigned char *dummy2) {
         tsz *= elsz;
         memcpy(g_out, t, tsz);
         g_out += tsz;
@@ -39,6 +38,29 @@ int lz4x_new(unsigned char *g_in, int flen, unsigned char *g_out, int dec_enc) {
     #define __max(a, b) ((a > b) ? a : b)
     #define __min(a, b) ((a < b) ? a : b)
     #endif
+
+#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_DISABLE_PERFCRIT_LOCKS
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#ifndef NO_UTIME
+#  include <sys/types.h>
+#  include <sys/stat.h>
+
+#  ifdef _MSC_VER
+#    include <sys/utime.h>
+#  else
+#    include <utime.h>
+#  endif
+#endif
+
+#ifndef _MSC_VER
+#  define _ftelli64 ftello64
+#endif
 
 typedef unsigned char U8;
 typedef unsigned short U16;
@@ -57,24 +79,25 @@ typedef unsigned int U32;
 
 #define MIN_MATCH 4
 
-#define COMPRESS_BOUND (16+BLOCK_SIZE+(BLOCK_SIZE/255))
+#define EXCESS (16+(BLOCK_SIZE/255))
 
-//U8 g_buf[BLOCK_SIZE+COMPRESS_BOUND];
-static U8 *g_buf = NULL;
-if(!g_buf) g_buf = calloc(BLOCK_SIZE+COMPRESS_BOUND, sizeof(U8));
+static U8 *g_buf = NULL; //[BLOCK_SIZE+BLOCK_SIZE+EXCESS];
 
-#define LOAD_16(p) (*(const U16*)(&g_buf[p]))
-#define LOAD_32(p) (*(const U32*)(&g_buf[p]))
+#define MIN(a, b) (((a)<(b))?(a):(b))
+#define MAX(a, b) (((a)>(b))?(a):(b))
+
+#define LOAD_16(p) (*(U16*)(&g_buf[p]))
+#define LOAD_32(p) (*(U32*)(&g_buf[p]))
 #define STORE_16(p, x) (*(U16*)(&g_buf[p])=(x))
 #define COPY_32(d, s) (*(U32*)(&g_buf[d])=LOAD_32(s))
 
-#define HASH_BITS 19
+#define HASH_BITS 18
 #define HASH_SIZE (1<<HASH_BITS)
 #define NIL (-1)
 
 #define HASH_32(p) ((LOAD_32(p)*0x9E3779B9)>>(32-HASH_BITS))
 
-inline void wild_copy(int d, int s, int n)
+static void wild_copy(int d, int s, int n)
 {
   COPY_32(d, s);
   COPY_32(d+4, s+4);
@@ -87,7 +110,7 @@ inline void wild_copy(int d, int s, int n)
   }
 }
 
-void compress(const int max_chain)
+static void compress(const int max_chain)
 {
   //static int head[HASH_SIZE];
   //static int tail[WINDOW_SIZE];
@@ -96,9 +119,10 @@ void compress(const int max_chain)
   static int *tail = NULL;
   if(!tail) tail = calloc(WINDOW_SIZE, sizeof(int));
 
-  int n, i;
+  int n;
   while ((n=myfread(g_buf, 1, BLOCK_SIZE, g_in))>0)
   {
+    int i;
     for (i=0; i<HASH_SIZE; ++i)
       head[i]=NIL;
 
@@ -109,16 +133,16 @@ void compress(const int max_chain)
     while (p<n)
     {
       int best_len=0;
-      int dist;
+      int dist=0;
 
       const int max_match=(n-PADDING_LITERALS)-p;
-      if (max_match>=__max(12-PADDING_LITERALS, MIN_MATCH))
+      if (max_match>=MAX(12-PADDING_LITERALS, MIN_MATCH))
       {
-        const int w_start=__max(p-WINDOW_SIZE, NIL);
+        const int limit=MAX(p-WINDOW_SIZE, NIL);
         int chain_len=max_chain;
 
         int s=head[HASH_32(p)];
-        while (s>w_start)
+        while (s>limit)
         {
           if (g_buf[s+best_len]==g_buf[p+best_len] && LOAD_32(s)==LOAD_32(p))
           {
@@ -146,7 +170,7 @@ void compress(const int max_chain)
       if (best_len>=MIN_MATCH)
       {
         int len=best_len-MIN_MATCH;
-        const int nib=__min(len, 15);
+        const int nib=MIN(len, 15);
 
         if (pp!=p)
         {
@@ -217,48 +241,46 @@ void compress(const int max_chain)
     }
 
     const int comp_len=op-BLOCK_SIZE;
-    myfwrite((void*)&comp_len, 1, sizeof(comp_len), g_out);
-    myfwrite(&g_buf[BLOCK_SIZE], 1, comp_len, g_out);
+    myfwrite((void *)&comp_len, 1, sizeof(comp_len), g_out);
+    myfwrite((void *)&g_buf[BLOCK_SIZE], 1, comp_len, g_out);
 
     //fprintf(stderr, "%lld -> %lld\r", _ftelli64(g_in), _ftelli64(g_out));
   }
 }
 
-void compress_brute()
+static void compress_optimal()
 {
   //static int head[HASH_SIZE];
-  //static int nodes[WINDOW_SIZE][2];
   static int *head = NULL;
   if(!head) head = calloc(HASH_SIZE, sizeof(int));
-  static int **nodes = NULL;
-  if(!nodes) nodes = calloc(WINDOW_SIZE * 2, sizeof(int));
-  typedef struct
+  static int nodes[WINDOW_SIZE][2];
+  static struct
   {
     int cum;
 
     int len;
     int dist;
-  } path_t;
-  static path_t *path = NULL;
-  if(!path) path = calloc(BLOCK_SIZE+1, sizeof(path_t));
+  } path[BLOCK_SIZE+1];
 
-  int n, i, p;
+  int n;
   while ((n=myfread(g_buf, 1, BLOCK_SIZE, g_in))>0)
   {
     // Pass 1: Find all matches
 
+    int i;
     for (i=0; i<HASH_SIZE; ++i)
       head[i]=NIL;
 
+    int p;
     for (p=0; p<n; ++p)
     {
       int best_len=0;
       int dist=0;
 
       const int max_match=(n-PADDING_LITERALS)-p;
-      if (max_match>=__max(12-PADDING_LITERALS, MIN_MATCH))
+      if (max_match>=MAX(12-PADDING_LITERALS, MIN_MATCH))
       {
-        const int w_start=__max(p-WINDOW_SIZE, NIL);
+        const int limit=MAX(p-WINDOW_SIZE, NIL);
 
         int* left=&nodes[p&WINDOW_MASK][1];
         int* right=&nodes[p&WINDOW_MASK][0];
@@ -270,9 +292,9 @@ void compress_brute()
         int s=head[h];
         head[h]=p;
 
-        while (s>w_start)
+        while (s>limit)
         {
-          int len=__min(left_len, right_len);
+          int len=MIN(left_len, right_len);
 
           if (g_buf[s+len]==g_buf[p+len])
           {
@@ -333,7 +355,7 @@ void compress_brute()
       {
         int c1=1<<30;
 
-        const int j=__max(len-255, MIN_MATCH);
+        const int j=MAX(len-255, MIN_MATCH);
         for (i=len; i>=j; --i)
         {
           int tmp=path[p+i].cum+3;
@@ -370,13 +392,12 @@ void compress_brute()
     int op=BLOCK_SIZE;
     int pp=0;
 
-    int p=0;
     while (p<n)
     {
       if (path[p].len>=MIN_MATCH)
       {
         int len=path[p].len-MIN_MATCH;
-        const int nib=__min(len, 15);
+        const int nib=MIN(len, 15);
 
         if (pp!=p)
         {
@@ -438,14 +459,14 @@ void compress_brute()
     }
 
     const int comp_len=op-BLOCK_SIZE;
-    myfwrite((void*)&comp_len, 1, sizeof(comp_len), g_out);
-    myfwrite(&g_buf[BLOCK_SIZE], 1, comp_len, g_out);
+    myfwrite((void *)&comp_len, 1, sizeof(comp_len), g_out);
+    myfwrite((void *)&g_buf[BLOCK_SIZE], 1, comp_len, g_out);
 
     //fprintf(stderr, "%lld -> %lld\r", _ftelli64(g_in), _ftelli64(g_out));
   }
 }
 
-void decompress()
+static int decompress()
 {
   int comp_len;
   while (myfread(&comp_len, 1, sizeof(comp_len), g_in)>0)
@@ -453,13 +474,9 @@ void decompress()
     if (comp_len==LZ4_MAGIC)
       continue;
 
-    if (comp_len<0 || comp_len>COMPRESS_BOUND
+    if (comp_len<2 || comp_len>(BLOCK_SIZE+EXCESS)
         || myfread(&g_buf[BLOCK_SIZE], 1, comp_len, g_in)!=comp_len)
-    {
-      //fprintf(stderr, "Corrupt input\n");
-      //exit(1);
-      return;
-    }
+      return -1;
 
     int p=0;
 
@@ -482,17 +499,20 @@ void decompress()
               break;
           }
         }
+        if ((p+run)>BLOCK_SIZE)
+          return -1;
 
         wild_copy(p, ip, run);
         p+=run;
         ip+=run;
-
         if (ip>=ip_end)
           break;
       }
 
       int s=p-LOAD_16(ip);
       ip+=2;
+      //if (s<0)
+      //  return -1;
 
       int len=(token&15)+MIN_MATCH;
       if (len==(15+MIN_MATCH))
@@ -505,7 +525,10 @@ void decompress()
             break;
         }
       }
+      if ((p+len)>BLOCK_SIZE)
+        return -1;
 
+      /*
       if ((p-s)>=4)
       {
         wild_copy(p, s, len);
@@ -516,24 +539,39 @@ void decompress()
         while (len--!=0)
           g_buf[p++]=g_buf[s++];
       }
+      */
+      // https://zenhax.com/viewtopic.php?p=34353#p34353
+        while (len--!=0)
+          g_buf[p++]=(s<0) ? g_out[s++] : g_buf[s++];
     }
 
     if (myfwrite(g_buf, 1, p, g_out)!=p)
     {
-      perror("Fwrite() failed");
-      exit(1);
+      return -1;
+      //perror("Fwrite() failed");
+      //exit(1);
     }
   }
+
+  return 0;
 }
 
-    
+int lz4x_new(unsigned char *in, int len, unsigned char *out, int dec_enc) {
+
+    g_in     = in;
+    g_out    = out;
+    flen     = len;
+    g_in_bck = g_in;
+    unsigned char *g_out_bck = g_out;
+    if(!g_buf) g_buf = calloc(BLOCK_SIZE+BLOCK_SIZE+EXCESS, sizeof(U8));
+
     if(!dec_enc) {
 
         decompress();
 
     } else {
 
-        compress_brute();
+        compress_optimal();
 
     }
 

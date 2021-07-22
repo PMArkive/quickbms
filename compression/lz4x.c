@@ -15,19 +15,16 @@ Written and placed in the public domain by Ilya Muravyov
 #include <string.h>
 
 
-
-int lz4x(unsigned char *fin, int flen, unsigned char *fout, int dec_enc) {
-
-    unsigned char *fin_bck = fin;
-    unsigned char *fout_bck = fout;
-    int myfread(void *t, int elsz, int tsz, unsigned char *dummy2) {
+    static unsigned char *fin_bck, *fin, *fout;
+    static int flen;
+    static int myfread(void *t, int elsz, int tsz, unsigned char *dummy2) {
         tsz *= elsz;
         if(tsz > ((fin_bck + flen) - fin)) tsz = ((fin_bck + flen) - fin);
         memcpy(t, fin, tsz);
         fin += tsz;
         return tsz;
     }
-    int myfwrite(void *t, int elsz, int tsz, unsigned char *dummy2) {
+    static int myfwrite(void *t, int elsz, int tsz, unsigned char *dummy2) {
         tsz *= elsz;
         memcpy(fout, t, tsz);
         fout += tsz;
@@ -56,7 +53,6 @@ typedef unsigned int uint;
 
 //static byte buf[BLOCK_SIZE+COMPRESS_BOUND];
 static byte *buf = NULL;
-if(!buf) buf = calloc(BLOCK_SIZE+COMPRESS_BOUND, sizeof(byte));
 
 #define HASH_LOG 18
 #define HASH_SIZE (1<<HASH_LOG)
@@ -65,7 +61,7 @@ if(!buf) buf = calloc(BLOCK_SIZE+COMPRESS_BOUND, sizeof(byte));
 #ifdef FORCE_UNALIGNED
 #  define load32(p) (*((const uint*)&buf[p]))
 #else
-  inline uint load32(int p)
+  static uint load32(int p)
   {
     uint x;
     memcpy(&x, &buf[p], sizeof(uint));
@@ -78,12 +74,12 @@ if(!buf) buf = calloc(BLOCK_SIZE+COMPRESS_BOUND, sizeof(byte));
 #define get_byte() buf[BLOCK_SIZE+(bp++)]
 #define put_byte(c) (buf[BLOCK_SIZE+(bsize++)]=(c))
 
-void compress(const int max_chain)
+static void compress(const int max_chain)
 {
   //static int head[HASH_SIZE];
-  //static int tail[WSIZE];
   static int *head = NULL;
   head = calloc(HASH_SIZE, sizeof(int));
+  //static int tail[WSIZE];
   static int *tail = NULL;
   if(!tail) tail = calloc(WSIZE, sizeof(int));
 
@@ -225,14 +221,14 @@ void compress(const int max_chain)
   }
 }
 
-void compress_optimal()
+static void compress_optimal()
 {
   //static int head[HASH_SIZE];
-  //static int nodes[WSIZE][2];
   static int *head = NULL;
   if(!head) head = calloc(HASH_SIZE, sizeof(int));
-  static int **nodes = NULL;
-  if(!nodes) nodes = calloc(WSIZE * 2, sizeof(int));
+  static int nodes[WSIZE][2];
+  //static int **nodes = NULL;
+  //if(!nodes) nodes = calloc(WSIZE * 2, sizeof(int));
   typedef struct
   {
     int cum;
@@ -455,7 +451,7 @@ void compress_optimal()
   }
 }
 
-int decompress()
+static int decompress()
 {
     int i;
 #ifdef LZ4_MAGIC
@@ -556,8 +552,14 @@ int decompress()
 
 
 
+int lz4x(unsigned char *in, int len, unsigned char *out, int dec_enc) {
 
-
+    fin     = in;
+    fout    = out;
+    flen    = len;
+    fin_bck = fin;
+    unsigned char *fout_bck = fout;
+    if(!buf) buf = calloc(BLOCK_SIZE+COMPRESS_BOUND, sizeof(byte));
     
     if(!dec_enc) {
 

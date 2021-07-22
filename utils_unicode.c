@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2017 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -240,10 +240,17 @@ u8 *get_codepage_from_id(int id) {
 
 int get_codepage_from_string(u8 *name) {
     int     i;
+    while(*name && ((*name <= ' ') || (*name == '_') || (*name == '-'))) name++;
     for(i = 0; g_charset_codepage[i].identifier >= 0; i++) {
         if(!stricmp(name, g_charset_codepage[i].name)) {
             return g_charset_codepage[i].identifier;
         }
+    }
+    if(!strnicmp(name, "cp", 2)) {
+        return get_codepage_from_string(name + 2);
+    }
+    if(myisdigitstr(name)) {
+        return myatoi(name);
     }
     return -1;
 }
@@ -532,6 +539,7 @@ u8 *_set_utf8_to_unicode(u8 *input, int input_size, int *ret_size, int utf32) {
     u8          *p,
                 *l;
 
+    if(!input) input = "";
     if(input_size < 0) input_size = strlen(input);
 
     p = input;
@@ -698,12 +706,66 @@ void set_codepage(void) {
 
 void set_g_codepage(u8 *str, int strn) {
     int     t;
+    if(!str) str = "UTF8";
     if(!str[0] || myisdigitstr(str)) {
-        g_codepage = strn;
+        if(strn >= 0) g_codepage = strn;
+        else          g_codepage = myatoi(str);
     } else {
         t = get_codepage_from_string(str);
         if(t >= 0) g_codepage = t;
     }
     set_codepage();
+}
+
+
+
+wchar_t *mywstrcpy(wchar_t *dst, wchar_t *src) {
+    int     i;
+    if(!dst) return NULL;
+    if(!src) src = L"";
+    for(i = 0; (dst[i] = src[i]); i++);
+    return dst;
+}
+
+
+
+wchar_t *mywstrncpy(wchar_t *dst, wchar_t *src, int num) {
+    int     i;
+    if(num < 0) return mywstrcpy(dst, src);
+    if(!num) return NULL;
+    if(!dst) return NULL;
+    if(!src) src = L"";
+    num--;  // reserve space for final NUL (not done by original implementation)
+    for(i = 0; (i < num) && (dst[i] = src[i]); i++);
+    dst[i] = 0; // overwrites the NUL or add a new one
+    return dst;
+}
+
+
+
+int mywstrcmp(wchar_t *a, wchar_t *b) {
+    int     i;
+    if(!a && !b) return 0;
+    if(!a) return 1;
+    if(!b) return -1;
+    for(i = 0; a[i] && b[i] && (a[i] == b[i]); i++);
+    if(!a[i] && !b[i]) return 0;
+    if(b[i]) return 1;
+    if(a[i]) return -1;
+    return 0;
+}
+
+
+
+int mywstricmp(wchar_t *a, wchar_t *b) {
+    int     i;
+    if(!a && !b) return 0;
+    if(!a) return 1;
+    if(!b) return -1;
+    for(i = 0; a[i] && b[i] && (tolower(a[i]) == tolower(b[i])); i++);
+    if(!a[i] && !b[i]) return 0;
+    if(b[i]) return 1;
+    if(a[i]) return -1;
+    return 0;
 }
 

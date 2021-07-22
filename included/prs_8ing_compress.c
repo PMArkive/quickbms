@@ -6,11 +6,9 @@ http://www.mediafire.com/?vty5jymlmm2
 modified by Luigi Auriemma
 */
 
-int prs_8ing_compress(unsigned char *_sbuf, int slen, unsigned char *_dbuf) {
-
-    int ctrl_ptr;
-    int data_ptr;
-    int ctrl_bit;
+static int ctrl_ptr;
+static int data_ptr;
+static int ctrl_bit;
 
 //#include "stdio.h"
 //#include "common.h"
@@ -20,7 +18,7 @@ int prs_8ing_compress(unsigned char *_sbuf, int slen, unsigned char *_dbuf) {
 // Tests the current buffer position for RLE encoding
 // This will scan ahead of the current position until
 // the byte changes or the maximum of 256 is reached
-void init_comp()
+static void init_comp()
 {
 	// set to initial values
 	ctrl_ptr = 0;
@@ -28,7 +26,7 @@ void init_comp()
 	ctrl_bit = 7;
 }
 
-int check_rle(char *sbuf, int sptr, int *length, int *pos)
+static int check_rle(char *sbuf, int sptr, int *length, int *pos)
 {
 	int tlength = 0;
 	char *p = &sbuf[sptr];
@@ -55,7 +53,7 @@ int check_rle(char *sbuf, int sptr, int *length, int *pos)
 // Scans backwards from the current buffer position
 // for a similar byte sequence. Scanning area is limited
 // to last 8192 bytes.  
-int check_window(char *sbuf, int sptr, int *length, int *pos)
+static int check_window(char *sbuf, int sptr, int *length, int *pos)
 {
    int tlength = 2;
    int tpos = -1;
@@ -89,7 +87,7 @@ int check_window(char *sbuf, int sptr, int *length, int *pos)
    return(tlength >= 2);
 }
 
-void write_bit(char *dbuf, int bit)
+static void write_bit(char *dbuf, int bit)
 {
     if(ctrl_bit==-1)
     {
@@ -102,7 +100,7 @@ void write_bit(char *dbuf, int bit)
 }
 
 
-void write_comp_a(char *dbuf, int length, int pos)
+static void write_comp_a(char *dbuf, int length, int pos)
 {
     int ctr = 2;
     write_bit(dbuf, 0);
@@ -119,7 +117,7 @@ void write_comp_a(char *dbuf, int length, int pos)
     dbuf[data_ptr++] = (~pos + 1) & 0xFF;
 }
 
-void write_comp_b(char *dbuf, int length, int pos)
+static void write_comp_b(char *dbuf, int length, int pos)
 {
     write_bit(dbuf, 0);
     write_bit(dbuf, 1);
@@ -142,7 +140,7 @@ void write_comp_b(char *dbuf, int length, int pos)
     }
 }
 
-void write_comp(char *dbuf, int length, int pos)
+static void write_comp(char *dbuf, int length, int pos)
 {
 	if((pos > 255) || (length > 5))
     {
@@ -153,13 +151,13 @@ void write_comp(char *dbuf, int length, int pos)
     }
 }
 
-void write_nocomp(char *dbuf, char *sbuf, int sptr)
+static void write_nocomp(char *dbuf, char *sbuf, int sptr)
 {
     write_bit(dbuf,1);
     dbuf[data_ptr++] = sbuf[sptr] & 0xFF;
 }
 
-
+int prs_8ing_compress(unsigned char *_sbuf, int slen, unsigned char *_dbuf) {
     int length;
     int pos;
     int sptr = 0;

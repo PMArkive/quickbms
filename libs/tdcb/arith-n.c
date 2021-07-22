@@ -50,7 +50,7 @@ void arithn_flush_model( void );
 void arithn_initialize_arithmetic_decoder( BIT_FILE *stream );
 void arithn_remove_symbol_from_stream( BIT_FILE *stream, SYMBOL *s );
 void arithn_initialize_arithmetic_encoder( void );
-void encode_symbol( BIT_FILE *stream, SYMBOL *s );
+void arithn_encode_symbol( BIT_FILE *stream, SYMBOL *s );
 void arithn_flush_arithmetic_encoder( BIT_FILE *stream );
 short int arithn_get_current_count( SYMBOL *s );
 
@@ -68,7 +68,7 @@ void arithn_flush_model();
 void arithn_initialize_arithmetic_decoder();
 void arithn_remove_symbol_from_stream();
 void arithn_initialize_arithmetic_encoder();
-void encode_symbol();
+void arithn_encode_symbol();
 void arithn_flush_arithmetic_encoder();
 short int arithn_get_current_count();
 
@@ -77,6 +77,7 @@ short int arithn_get_current_count();
 
 //char *CompressionName = "Adaptive order n model with arithmetic coding";
 //char *Usage           = "in-file out-file [ -o order ]\n\n";
+#define max_order   arithn_maxorder
 int max_order         = 3;
 
 /*
@@ -210,6 +211,7 @@ typedef struct context {
  * look at contexts[0].  This array of context pointers is set up
  * every time the model is updated.
  */
+#define contexts    arithn_contexts
 CONTEXT **contexts = NULL;
 
 /*
@@ -218,6 +220,7 @@ CONTEXT **contexts = NULL;
  * will only go down to -1 for normal symbols, but can go to -2 for
  * EOF and FLUSH.
  */
+#define current_order   arithn_current_order
 int current_order;
 
 /*
@@ -228,28 +231,30 @@ int current_order;
  * can be excluded from lower order context total calculations.
  */
 
+#define totals  arithn_totals
 short int totals[ 258 ];
+#define scoreboard  arithn_scoreboard
 char scoreboard[ 256 ];
 
 /*
  * Local procedure declarations for modeling routines.
  */
 #ifdef __STDC__
-void update_table( CONTEXT *table, int symbol );
-void rescale_table( CONTEXT *table );
-void totalize_table( CONTEXT *table );
-CONTEXT *shift_to_next_context( CONTEXT *table, int c, int order);
-CONTEXT *allocate_next_order_table( CONTEXT *table,
+static void update_table( CONTEXT *table, int symbol );
+static void rescale_table( CONTEXT *table );
+static void totalize_table( CONTEXT *table );
+static CONTEXT *shift_to_next_context( CONTEXT *table, int c, int order);
+static CONTEXT *allocate_next_order_table( CONTEXT *table,
                                     int symbol,
                                     CONTEXT *lesser_context );
-void recursive_flush( CONTEXT *table );
+static void recursive_flush( CONTEXT *table );
 #else
-void update_table();
-void rescale_table();
-void totalize_table();
-CONTEXT *shift_to_next_context();
-CONTEXT *allocate_next_order_table();
-void recursive_flush();
+static void update_table();
+static void rescale_table();
+static void totalize_table();
+static CONTEXT *shift_to_next_context();
+static CONTEXT *allocate_next_order_table();
+static void recursive_flush();
 #endif
 
 /*
@@ -266,7 +271,9 @@ void recursive_flush();
  * ready to go.
  */
 
+#define null_table  arithn_null_table
     CONTEXT *null_table = NULL;
+#define control_table   arithn_control_table
     CONTEXT *control_table = NULL;
 
 void arithn_initialize_model()
@@ -822,9 +829,13 @@ void arithn_flush_model()
  * by declaring them as short ints, they will actually be 16 bits
  * on most 80X86 and 680X0 machines, as well as VAXen.
  */
+#define code    arithn_code
 static unsigned short int code;  /* The present input code value       */
+#define low     arithn_low
 static unsigned short int low;   /* Start of the current code range    */
+#define high    arithn_high
 static unsigned short int high;  /* End of the current code range      */
+#define underflow_bits  arithn_underflow_bits
 long underflow_bits;             /* Number of underflow bits pending   */
 
 /*
@@ -865,7 +876,7 @@ BIT_FILE *stream;
  * the output stream.  Finally, high and low are stable again and
  * the routine returns.
  */
-void encode_symbol( stream, s )
+void arithn_encode_symbol( stream, s )
 BIT_FILE *stream;
 SYMBOL *s;
 {
@@ -1045,7 +1056,7 @@ char *argv[];
             c = DONE;
         do {
             escaped = arithn_convert_int_to_symbol( c, &s );
-            encode_symbol( output, &s );
+            arithn_encode_symbol( output, &s );
         } while ( escaped );
         if ( c == DONE )
 	    break;

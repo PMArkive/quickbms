@@ -113,7 +113,7 @@ namespace Ppmz2
 
 		        pLast = LN_CutTail(&(_lru));
 		        assert(pLast);
-		        c = (Context*)( (unsigned long) pLast - (unsigned long)(&(((Context*)0)->_lru)) );
+		        c = (Context*)( (intptr_t) pLast - (intptr_t)(&(((Context*)0)->_lru)) );
 
 		        assert( ! c->_parent || c->_parent->_contextOrder == (c->_contextOrder - 1) );
 		        assert( c->_contextOrder == _order || ! c->_child  || c->_child->_contextOrder  == (c->_contextOrder + 1) );

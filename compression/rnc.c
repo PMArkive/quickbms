@@ -158,18 +158,18 @@ typedef struct {
     int len;
 } tuple;
 
-unsigned char blk[WINMAX];
-int linkp[WINMAX];
-int hashp[HASHMAX];
-int blkstart, bpos;
-int blklen;
+static unsigned char blk[WINMAX];
+static int linkp[WINMAX];
+static int hashp[HASHMAX];
+static int blkstart, bpos;
+static int blklen;
 
-tuple tuples[MAXTUPLES];
-int ntuple;
+static tuple tuples[MAXTUPLES];
+static int ntuple;
 
-unsigned char *packed;
-long packedlen;
-long packedpos, bitpos, bitcount, bitbuf;
+static unsigned char *packed;
+static long packedlen;
+static long packedpos, bitpos, bitcount, bitbuf;
 
 static int hash (unsigned char *a) {
     return ((a[0] * 7 + a[1]) * 7 + a[2]) % HASHMAX;

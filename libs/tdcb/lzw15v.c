@@ -65,6 +65,7 @@ unsigned int lzw15v_decode_string();
  * as possible.
  */
 
+#define dict    lzw15v_dict
 static struct dictionary {
     int code_value;
     int parent_code;
@@ -82,9 +83,13 @@ static struct dictionary {
  * trigger the next jump in word size.
  */
 
+#define decode_stack        lzw15v_decode_stack
 char decode_stack[ TABLE_SIZE ];
+#define next_code           lzw15v_next_code
 unsigned int next_code;
+#define current_code_bits   lzw15v_current_code_bits
 int current_code_bits;
+#define next_bump_code      lzw15v_next_bump_code
 unsigned int next_bump_code;
 
 /*

@@ -1,5 +1,5 @@
 /* Capstone Disassembler Engine */
-/* By Nguyen Anh Quynh <aquynh@gmail.com>, 2013-2014 */
+/* By Nguyen Anh Quynh <aquynh@gmail.com>, 2013-2019 */
 
 #include <stdio.h>
 
@@ -133,6 +133,14 @@ static void print_insn_detail(cs_insn *ins)
 			case M68K_OP_FP_DOUBLE:
 				printf("\t\toperands[%u].type: FP_DOUBLE\n", i);
 				printf("\t\t\toperands[%u].dimm: %lf\n", i, op->dimm);
+				break;
+			case M68K_OP_REG_BITS:
+				printf("\t\toperands[%u].type: REG_BITS = $%x\n", i, op->register_bits);
+				break;
+			case M68K_OP_REG_PAIR:
+				printf("\t\toperands[%u].type: REG_PAIR = (%s, %s)\n", i,
+					cs_reg_name(handle, op->reg_pair.reg_0),
+					cs_reg_name(handle, op->reg_pair.reg_1));
 				break;
 		}
 	}

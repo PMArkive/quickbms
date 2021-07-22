@@ -2,37 +2,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-
-int m99coder(unsigned char *infile, int insz, unsigned char *outfile, int dec_enc) {
-
-/*
- * m99coder.c
- * Copyright (C) 2003-2004 yuta mori
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * yuu (yuta mori) :
- *   mailto:YIV01157@nifty.ne.jp
- *   http://homepage3.nifty.com/wpage/
- */
-
-//#include <stdio.h>
-//#include <stdlib.h>
 //#include <time.h>
 
-/*static*/ const int log2table[256]=
+static const int log2table[256]=
 {
   -1,
   0,
@@ -49,11 +21,11 @@ int m99coder(unsigned char *infile, int insz, unsigned char *outfile, int dec_en
   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7
 };
 
-int u8_log2(unsigned char x)
+static int u8_log2(unsigned char x)
 {
   return log2table[x];
 }
-int u16_log2(unsigned short x)
+static int u16_log2(unsigned short x)
 {
   int z;
   if(x>>8)
@@ -62,7 +34,7 @@ int u16_log2(unsigned short x)
     z=u8_log2(x);
   return z;
 }
-int u32_log2(unsigned int x)
+static int u32_log2(unsigned int x)
 {
   int z;
   if(x>>16)
@@ -75,16 +47,16 @@ int u32_log2(unsigned int x)
 //#pragma mark -
 
 /* 簡易ビット入出力ルーチン */
-///*static*/ FILE *infile,*outfile;
-/*static*/ int buffer,bcount,outcount;
-/*static*/ void _initput(unsigned char *file)
+static unsigned char *infile,*outfile;
+static int buffer,bcount,outcount;
+static void _initput(unsigned char *file)
 {
   outfile=file;
   buffer=0;
   bcount=8;
   outcount=0;
 }
-/*static*/ void _termput(void)
+static void _termput(void)
 {
   if(bcount!=8)
   {
@@ -93,18 +65,18 @@ int u32_log2(unsigned int x)
   }
   //fclose(outfile);
 }
-/*static*/ void _initget(unsigned char *file)
+static void _initget(unsigned char *file)
 {
   infile=file;
   buffer = *infile++; //buffer=fgetc(infile);
   bcount=8;
 }
-/*static*/ void _termget(void)
+static void _termget(void)
 {
   //fclose(infile);
 }
 #define MASK(v,n) ((v)&((1U<<(n))-1U))
-/*static*/ void _putbits(unsigned int v,int n)
+static void _putbits(unsigned int v,int n)
 {
   while(bcount<=n)
   {
@@ -118,7 +90,7 @@ int u32_log2(unsigned int x)
   bcount-=n;
   buffer|=MASK(v,n)<<bcount;
 }
-/*static*/ unsigned int _getbits(int n)
+static unsigned int _getbits(int n)
 {
   unsigned int v;
 
@@ -138,7 +110,7 @@ int u32_log2(unsigned int x)
 //#pragma mark -
 
 /* CBT符号 */
-/*static*/ void encode_number(int number,int max)
+static void encode_number(int number,int max)
 {
   int log2size,hold;
   if(max==0)
@@ -151,7 +123,7 @@ int u32_log2(unsigned int x)
     number+=hold;
   _putbits(number,log2size);
 }
-/*static*/ int decode_number(int max)
+static int decode_number(int max)
 {
   int number;
   int log2size,hold;
@@ -167,7 +139,7 @@ int u32_log2(unsigned int x)
 
 //#pragma mark -
 
-/*static*/ void _shellsort(int *A,int *B,int k)
+static void _shellsort(int *A,int *B,int k)
 {
   int h,i,j,t;
   for(h=4;h<k;h=h*3+1){}
@@ -185,7 +157,7 @@ int u32_log2(unsigned int x)
 
 //#pragma mark -
 
-/*static*/ void encode_depthfirst(unsigned char *T,int low,int high,int *A,int *B,int k)
+static void encode_depthfirst(unsigned char *T,int low,int high,int *A,int *B,int k)
 {
   if(k==1)
   {/* グループの記号が一種類だけならこれ以上の符号化は必要ない */
@@ -263,7 +235,7 @@ int u32_log2(unsigned int x)
   }
 }
 
-void encode(unsigned char *T,int n)
+static void encode(unsigned char *T,int n)
 {
   int A[256],B[256];
   int i,j,k;
@@ -294,7 +266,7 @@ void encode(unsigned char *T,int n)
 
 //#pragma mark -
 
-/*static*/ void decode_depthfirst(int low,int high,int *A,int *B,int k)
+static void decode_depthfirst(int low,int high,int *A,int *B,int k)
 {
   if(k==1)
   {/* グループの記号が一種類だけならこれ以上の復号化は必要ない */
@@ -365,7 +337,7 @@ void encode(unsigned char *T,int n)
   }
 }
 
-void decode(void)
+static void decode(void)
 {
   int A[256],B[256];
   int i,j,k,n;
@@ -388,6 +360,33 @@ void decode(void)
   decode_depthfirst(0,n-1,A,B,k);
 }
 
+int m99coder(unsigned char *_infile, int insz, unsigned char *_outfile, int dec_enc) {
+
+/*
+ * m99coder.c
+ * Copyright (C) 2003-2004 yuta mori
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * yuu (yuta mori) :
+ *   mailto:YIV01157@nifty.ne.jp
+ *   http://homepage3.nifty.com/wpage/
+ */
+
+    infile  = _infile;
+    outfile = _outfile;
 
     if(dec_enc) {
         _initput(outfile);

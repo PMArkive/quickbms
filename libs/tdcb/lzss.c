@@ -14,12 +14,12 @@
 
 /*
  * Various constants used to define the compression parameters.  The
- * INDEX_BIT_COUNT tells how many bits we allocate to indices into the
+ * lzss_INDEX_BIT_COUNT tells how many bits we allocate to indices into the
  * text window.  This directly determines the WINDOW_SIZE.  The
- * LENGTH_BIT_COUNT tells how many bits we allocate for the length of
+ * lzss_LENGTH_BIT_COUNT tells how many bits we allocate for the length of
  * an encode phrase. This determines the size of the look ahead buffer.
  * The TREE_ROOT is a special node in the tree that always points to
- * the root node of the binary phrase tree.  END_OF_STREAM is a special
+ * the root node of the binary phrase tree.  lzss_END_OF_STREAM is a special
  * index used to flag the fact that the file has been completely
  * encoded, and there is no more data.  UNUSED is the null index for
  * the tree. MOD_WINDOW() is a macro used to perform arithmetic on tree
@@ -27,13 +27,13 @@
  *
  */
 
-static int INDEX_BIT_COUNT   = 12;
-static int LENGTH_BIT_COUNT  = 4;
-static int DUMMY9            = 9;
-static int END_OF_STREAM     = 0;
-#define WINDOW_SIZE          ( 1 << INDEX_BIT_COUNT )
-#define RAW_LOOK_AHEAD_SIZE  ( 1 << LENGTH_BIT_COUNT )
-#define BREAK_EVEN           ( ( 1 + INDEX_BIT_COUNT + LENGTH_BIT_COUNT ) / DUMMY9 )
+static int lzss_INDEX_BIT_COUNT   = 12;
+static int lzss_LENGTH_BIT_COUNT  = 4;
+static int lzss_DUMMY9            = 9;
+static int lzss_END_OF_STREAM     = 0;
+#define WINDOW_SIZE          ( 1 << lzss_INDEX_BIT_COUNT )
+#define RAW_LOOK_AHEAD_SIZE  ( 1 << lzss_LENGTH_BIT_COUNT )
+#define BREAK_EVEN           ( ( 1 + lzss_INDEX_BIT_COUNT + lzss_LENGTH_BIT_COUNT ) / lzss_DUMMY9 )
 #define LOOK_AHEAD_SIZE      ( RAW_LOOK_AHEAD_SIZE + BREAK_EVEN )
 #define TREE_ROOT            WINDOW_SIZE
 #define MOD_WINDOW( a )      ( ( a ) & ( WINDOW_SIZE - 1 ) )
@@ -68,10 +68,10 @@ QUICK_EXPAND(lzss)
             window[ current_position ] = (unsigned char) c;
             current_position = MOD_WINDOW( current_position + 1 );
         } else {
-            match_position = (int) InputBits( input, INDEX_BIT_COUNT );
-            if ( match_position == END_OF_STREAM )
+            match_position = (int) InputBits( input, lzss_INDEX_BIT_COUNT );
+            if ( match_position == lzss_END_OF_STREAM )
                 break;
-            match_length = (int) InputBits( input, LENGTH_BIT_COUNT );
+            match_length = (int) InputBits( input, lzss_LENGTH_BIT_COUNT );
             match_length += BREAK_EVEN;
             for ( i = 0 ; i <= match_length ; i++ ) {
                 c = window[ MOD_WINDOW( match_position + i ) ];
@@ -88,10 +88,10 @@ QUICK_EXPAND(lzss)
 
 
 int tdcb_lzss_init(int x1, int x2, int x3, int x4) {
-    INDEX_BIT_COUNT   = x1;
-    LENGTH_BIT_COUNT  = x2;
-    DUMMY9            = x3;
-    END_OF_STREAM     = x4;
+    lzss_INDEX_BIT_COUNT   = x1;
+    lzss_LENGTH_BIT_COUNT  = x2;
+    lzss_DUMMY9            = x3;
+    lzss_END_OF_STREAM     = x4;
     return(0);
 }
 

@@ -1,5 +1,5 @@
 /**
-    Copyright (C) powturbo 2015-2017
+    Copyright (C) powturbo 2015-2020
     GPL v2 License
 
     This program is free software; you can redistribute it and/or modify
@@ -59,14 +59,14 @@ unsigned  srlec64(const unsigned char *__restrict in, unsigned inlen, unsigned c
 unsigned  srled64(const unsigned char *__restrict in, unsigned inlen, unsigned char *__restrict out, unsigned outlen, uint64_t e);
 
 // RLE w. automatic escape char determination
-unsigned  srlec(const unsigned char *__restrict in, unsigned inlen, unsigned char *__restrict out);
-unsigned _srled(const unsigned char *__restrict in,                 unsigned char *__restrict out, unsigned outlen);
-unsigned  srled(const unsigned char *__restrict in, unsigned inlen, unsigned char *__restrict out, unsigned outlen);
+unsigned  srlec(  const unsigned char *__restrict in, unsigned inlen, unsigned char *__restrict out);
+unsigned _srled(  const unsigned char *__restrict in,                 unsigned char *__restrict out, unsigned outlen);
+unsigned  srled(  const unsigned char *__restrict in, unsigned inlen, unsigned char *__restrict out, unsigned outlen);
 
 // Turbo RLE
-unsigned  trlec(const unsigned char *__restrict in, unsigned inlen, unsigned char *__restrict out);
-unsigned _trled(const unsigned char *__restrict in,                 unsigned char *__restrict out, unsigned outlen);
-unsigned  trled(const unsigned char *__restrict in, unsigned inlen, unsigned char *__restrict out, unsigned outlen);
+unsigned  trlec(  const unsigned char *__restrict in, unsigned inlen, unsigned char *__restrict out);
+unsigned _trled(  const unsigned char *__restrict in,                 unsigned char *__restrict out, unsigned outlen);
+unsigned  trled(  const unsigned char *__restrict in, unsigned inlen, unsigned char *__restrict out, unsigned outlen);
 #ifdef __cplusplus
 }
 #endif

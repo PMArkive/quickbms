@@ -36,7 +36,7 @@
     #define TCP_NODELAY 0x0001
 #endif
 
-#define SSL_COMPAT(X)   SSL_CTX_set_cipher_list(X, "ALL"); \
+#define SSL_COMPAT(X)   SSL_CTX_set_cipher_list(X, SSL_TXT_ALL); \
                         SSL_CTX_set_options(X, SSL_OP_ALL);
 
 
@@ -420,6 +420,9 @@ int create_socket(socket_file_t *sockfile) {
 
             sockfile->ssl_sd = SSL_new(sockfile->ctx_sd);
             if(!sockfile->ssl_sd) goto quit;
+            #ifdef SSL_set_tlsext_host_name
+            SSL_set_tlsext_host_name(sockfile->ssl_sd, sockfile->host);
+            #endif
             SSL_set_fd(sockfile->ssl_sd, sockfile->sd);
             if(SSL_accept(sockfile->ssl_sd) < 0) goto quit;
 
@@ -527,7 +530,7 @@ socket_file_t *socket_open(u8 *fname) {
     sockfile_tmp->ssl_method_type = "23";
 
     sscanf(fname,
-        "%10[^:]://%n%1024[^:,]:%d,%d,%u",
+        "%10[^:]://%n%1024[^:,\\/?&]:%d,%d,%u",
         proto,
         &host_n,
         host,
@@ -541,7 +544,11 @@ socket_file_t *socket_open(u8 *fname) {
     else if(!stricmp(proto, "icmp"))    sockfile_tmp->proto = IPPROTO_ICMP;
     else if(!stricmp(proto, "udp_raw")) sockfile_tmp->proto = IPPROTO_UDP;
     else if(!stricmp(proto, "tcp_raw")) sockfile_tmp->proto = IPPROTO_TCP;
-    else if(!stricmp(proto, "ssl"))   { sockfile_tmp->proto = -1;               sockfile_tmp->dossl = 1; }
+    else if(!stricmp(proto, "ssl"))   { sockfile_tmp->proto = -1;               sockfile_tmp->dossl = 1; }  // ssl23
+    else if(!stricmp(proto, "ssl3"))  { sockfile_tmp->proto = -1;               sockfile_tmp->dossl = 1;    sockfile_tmp->ssl_method_type = "3";    }
+    else if(!stricmp(proto, "ssl2"))  { sockfile_tmp->proto = -1;               sockfile_tmp->dossl = 1;    sockfile_tmp->ssl_method_type = "2";    }
+    else if(!stricmp(proto, "dtls"))  { sockfile_tmp->proto = -1;               sockfile_tmp->dossl = 1;    sockfile_tmp->ssl_method_type = "dtls"; }
+    else if(!stricmp(proto, "tls1"))  { sockfile_tmp->proto = -1;               sockfile_tmp->dossl = 1;    sockfile_tmp->ssl_method_type = "tls1"; }
     else if(!stricmp(proto, "http"))  { sockfile_tmp->proto = IPPROTO_HTTP;     sockfile_tmp->host = mystrdup_simple(fname); }
     else if(!stricmp(proto, "https")) { sockfile_tmp->proto = IPPROTO_HTTPS;    sockfile_tmp->host = mystrdup_simple(fname); }
     else {

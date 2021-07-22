@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2019 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,6 +19,11 @@
 */
 
 // QuickBMS CMD operations
+
+
+
+void bms_init(int reinit);
+void quickbms_set_reimport_var(void);
 
 
 
@@ -93,7 +98,7 @@ crc_context *init_crc(u8 *type, u8 *key, u8 *ivec) {
     if(g_verbose) {
         int     i,
                 len = 0;
-        u8      tmp[((NUMBERSZ + 5) * 256) + 10 + 1];   // len is already zero
+        static u8   tmp[((NUMBERSZ + 5) * 256) + 10 + 1];   // len is already zero
         len += sprintf(tmp + len, "{");
         for(i = 0; i < 256; i++) {
             if(i && !(i % 8)) len += sprintf(tmp + len, "\n");
@@ -113,6 +118,30 @@ int old_set_math_operator(u8 **data);
 
 
 
+int check_condition_strcmp(u8 *var1, int len1, u8 *var2, int len2, int sign) {
+    if(!var1 || !var2) return 0;    // like check_strcmp_args
+    if(!var1) return -1;
+    if(!var2) return 1;
+    if((len1 < 0) || (len2 < 0)) {
+        if(sign) {
+            return strcmp (var1, var2);
+        } else {
+            return stricmp(var1, var2);
+        }
+    } else {
+        if(len1 < len2) return -1;
+        if(len1 > len2) return 1;
+        if(sign) {
+            return memcmp (var1, var2, len2);
+        } else {
+            return memicmp(var1, var2, len2);
+        }
+    }
+    return 0;
+}
+
+
+
 int check_condition(int cmd, int res1, u8 *xcond, int res2) {
     int     var1n,
             var2n,
@@ -121,7 +150,10 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
             idx,
             ifs,
             i,
-            res_db[MAX_IFS + 1] = {0};
+            res_db[MAX_IFS + 1] = {0},
+            binary,
+            len1,   // only for binary
+            len2;   // only for binary
     u8      *cond,
             *var1,
             *var2,
@@ -144,11 +176,17 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
     idx = 0;
     for(ifs = 0; ifs < MAX_IFS; ifs++) {
 
+        sign    = 0;
+        binary  = 0;
+
         var1n   = 0;
         var2n   = 0;
-        sign    = 0;
+
         var1    = NULL;
         var2    = NULL;
+        len1    = -1;
+        len2    = -1;
+
         res     = FALSE;
 
         if(cmd < 0) {
@@ -157,26 +195,6 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
             var2n = res2;
         } else {
             cond = STR(idx + 1);
-            if(VARISNUM(idx + 0) && VARISNUM(idx + 2)) {
-                var1n = VAR32(idx + 0);
-                var2n = VAR32(idx + 2);
-            } else {
-                var1 = VAR(idx + 0);
-                var2 = VAR(idx + 2);
-                if(var_is_a_constant_string(CMD.var[idx + 0]) || var_is_a_constant_string(CMD.var[idx + 2])) {
-                    // do nothing because they are strings
-                } else if(myisdechex_string(var1) && myisdechex_string(var2)) {
-                    var1 = NULL;
-                    var2 = NULL;
-                    var1n = VAR32(idx + 0);
-                    var2n = VAR32(idx + 2);
-                }
-                // in the For command I use a Set instruction at the beginning of the cycle with a String type
-                // now the downside is that it's a bit slower but being used only at the beginning of the cycle there is no
-                // loss of time (some milliseconds on tons of For cycles) and there is the pro of using also things like:
-                //  for i = "hello" != "ciao"
-            }
-            idx += 3;
         }
 
         // replacing strcmp with a switch changes nothing in performance
@@ -185,13 +203,56 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
             sign = 1;
             cond++;
         }
+        if(cond[0] == '0') {    // like error_mode in String
+            binary = 1;
+            cond++;
+        }
+
+        if(cmd >= 0) {
+            if(VARISNUM(idx + 0) && VARISNUM(idx + 2)) {
+                var1n = VAR32(idx + 0);
+                var2n = VAR32(idx + 2);
+            } else {
+                var1 = VAR(idx + 0);
+                var2 = VAR(idx + 2);
+            }
+            if(!var1 || !var2) {    // not sure if it may happen
+                var1n = VAR32(idx + 0);
+                var2n = VAR32(idx + 2);
+            } else {
+                if(binary) {
+                    len1 = VARSZF(idx + 0);
+                    len2 = VARSZF(idx + 2);
+                }
+                /* keep it disabled for compatibility with old versions because strncmp != memcmp!
+                else {
+                    len1 = VARSZ (idx + 0);
+                    len2 = VARSZ (idx + 2);
+                } */
+
+                if(binary) {
+                    // do nothing, force it
+                } else {
+                    if(var_is_a_constant_string(CMD.var[idx + 0]) || var_is_a_constant_string(CMD.var[idx + 2])) {
+                        // do nothing because they are strings
+                    } else if(myisdechex_string(var1) && myisdechex_string(var2)) {
+                        var1 = NULL;
+                        var2 = NULL;
+                        var1n = VAR32(idx + 0);
+                        var2n = VAR32(idx + 2);
+                    }
+                    // in the For command I use a Set instruction at the beginning of the cycle with a String type
+                    // now the downside is that it's a bit slower but being used only at the beginning of the cycle there is no
+                    // loss of time (some milliseconds on tons of For cycles) and there is the pro of using also things like:
+                    //  for i = "hello" != "ciao"
+                }
+            }
+            idx += 3;
+        }
+
         if(!strcmp(cond, "<") || !stricmp(cond, "minor") || !stricmp(cond, "lower") || !stricmp(cond, "below")) {
             if(var1 && var2) {
-                if(sign) {
-                    if(strcmp (var1, var2) < 0) res = TRUE;
-                } else {
-                    if(stricmp(var1, var2) < 0) res = TRUE;
-                }
+                if(check_condition_strcmp(var1, len1, var2, len2, sign) < 0) res = TRUE;
             } else {
                 if(sign) {
                     if((u_int)var1n < (u_int)var2n) res = TRUE;
@@ -199,13 +260,10 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
                     if(var1n < var2n) res = TRUE;
                 }
             }
+
         } else if(!strcmp(cond, ">") || !stricmp(cond, "major") || !stricmp(cond, "greater") || !stricmp(cond, "above")) {
             if(var1 && var2) {
-                if(sign) {
-                    if(strcmp (var1, var2) > 0) res = TRUE;
-                } else {
-                    if(stricmp(var1, var2) > 0) res = TRUE;
-                }
+                if(check_condition_strcmp(var1, len1, var2, len2, sign) > 0) res = TRUE;
             } else {
                 if(sign) {
                     if((u_int)var1n > (u_int)var2n) res = TRUE;
@@ -213,33 +271,24 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
                     if(var1n > var2n) res = TRUE;
                 }
             }
+
         } else if(!strcmp(cond, "<>") || !strcmp(cond, "!=") || !strcmp(cond, "!==") || !stricmp(cond, "different")) {
             if(var1 && var2) {
-                if(sign) {
-                    if(strcmp (var1, var2) != 0) res = TRUE;
-                } else {
-                    if(stricmp(var1, var2) != 0) res = TRUE;
-                }
+                if(check_condition_strcmp(var1, len1, var2, len2, sign) != 0) res = TRUE;
             } else {
                 if(var1n != var2n) res = TRUE;
             }
+
         } else if(!strcmp(cond, "=") || !strcmp(cond, "==") || !strcmp(cond, "===") || !stricmp(cond, "equal") || !stricmp(cond, "strcmp")  || !stricmp(cond, "stricmp")  || !stricmp(cond, "strcasecmp")) {
             if(var1 && var2) {
-                if(sign) {
-                    if(!strcmp (var1, var2)) res = TRUE;
-                } else {
-                    if(!stricmp(var1, var2)) res = TRUE;
-                }
+                if(check_condition_strcmp(var1, len1, var2, len2, sign) == 0) res = TRUE;
             } else {
                 if(var1n == var2n) res = TRUE;
             }
+
         } else if(!strcmp(cond, ">=")) {
             if(var1 && var2) {
-                if(sign) {
-                    if(strcmp (var1, var2) >= 0) res = TRUE;
-                } else {
-                    if(stricmp(var1, var2) >= 0) res = TRUE;
-                }
+                if(check_condition_strcmp(var1, len1, var2, len2, sign) >= 0) res = TRUE;
             } else {
                 if(sign) {
                     if((u_int)var1n >= (u_int)var2n) res = TRUE;
@@ -247,13 +296,10 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
                     if(var1n >= var2n) res = TRUE;
                 }
             }
+
         } else if(!strcmp(cond, "<=")) {
             if(var1 && var2) {
-                if(sign) {
-                    if(strcmp (var1, var2) <= 0) res = TRUE;
-                } else {
-                    if(stricmp(var1, var2) <= 0) res = TRUE;
-                }
+                if(check_condition_strcmp(var1, len1, var2, len2, sign) <= 0) res = TRUE;
             } else {
                 if(sign) {
                     if((u_int)var1n <= (u_int)var2n) res = TRUE;
@@ -261,36 +307,51 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
                     if(var1n <= var2n) res = TRUE;
                 }
             }
+
         // added by me
         } else if(!strcmp(cond, "&") || !strcmp(cond, "&&") || !stricmp(cond, "and") || !stricmp(cond, "strstr") || !stricmp(cond, "stristr") || !stricmp(cond, "strcasestr")) {
             if(var1 && var2) {
-                if(sign) {
-                    if(strstr (var1, var2)) res = TRUE;
+                if(binary) {
+                    if(sign) {
+                        if(mymemmem (var1, var2, len1, len2)) res = TRUE;
+                    } else {
+                        if(mymemimem(var1, var2, len1, len2)) res = TRUE;
+                    }
                 } else {
-                    if(stristr(var1, var2)) res = TRUE;
+                    if(sign) {
+                        if(strstr (var1, var2)) res = TRUE;
+                    } else {
+                        if(stristr(var1, var2)) res = TRUE;
+                    }
                 }
             } else {
                 if(var1n & var2n) res = TRUE;
             }
+
         } else if(!strcmp(cond, "^") || !strcmp(cond, "^^") || !stricmp(cond, "xor")) {
             if(var1 && var2) {
-                if(sign) {
-                    if(!strcmp (var1, var2)) res = TRUE;
-                } else {
-                    if(!stricmp(var1, var2)) res = TRUE;
-                }
+                // nothing to check, string ^ string is zeroes if the same
+                if(!check_condition_strcmp(var1, len1, var2, len2, sign)) res = TRUE;
             } else {
                 if(var1n ^ var2n) res = TRUE;
             }
+
         } else if(!strcmp(cond, "|") || !strcmp(cond, "||") || !stricmp(cond, "or")) {
             if(var1 && var2) {
+                if(binary) {
+                    if((len1 > 0) || (len2 > 0)) res = TRUE;    // new
+                } else {
+                    if(var1[0] || var2[0]) res = TRUE;          // new
+                }
+            } else if(var1 || var2) {                           // new
                 res = TRUE;
             } else {
                 if(var1n | var2n) res = TRUE;
             }
+
         } else if(!strcmp(cond, "%") || !stricmp(cond, "mod")) {
             if(var1 && var2) {
-                res = TRUE;
+                res = TRUE; // unsupported
             } else {
                 if(sign) {
                     if(!var2n || ((u_int)var1n % (u_int)var2n)) res = TRUE;
@@ -298,9 +359,10 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
                     if(!var2n || (var1n % var2n)) res = TRUE;
                 }
             }
+
         } else if(!strcmp(cond, "/") || !stricmp(cond, "div")) {
             if(var1 && var2) {
-                res = TRUE;
+                res = TRUE; // unsupported
             } else {
                 if(sign) {
                     if(!var2n || ((u_int)var1n / (u_int)var2n)) res = TRUE;
@@ -308,9 +370,10 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
                     if(!var2n || (var1n / var2n)) res = TRUE;
                 }
             }
+
         } else if(!strcmp(cond, "<<") || !stricmp(cond, "shl")) {
             if(var1 && var2) {
-                res = TRUE;
+                res = TRUE; // unsupported
             } else {
                 if(sign) {
                     if((u_int)var1n << (u_int)var2n) res = TRUE;
@@ -318,9 +381,10 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
                     if(var1n << var2n) res = TRUE;
                 }
             }
+
         } else if(!strcmp(cond, ">>") || !stricmp(cond, "shr")) {
             if(var1 && var2) {
-                res = TRUE;
+                res = TRUE; // unsupported
             } else {
                 if(sign) {
                     if((u_int)var1n >> (u_int)var2n) res = TRUE;
@@ -328,24 +392,28 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
                     if(var1n >> var2n) res = TRUE;
                 }
             }
+
         } else if(!strcmp(cond, "!") || !stricmp(cond, "not")) {
             if(var1 && var2) {
-                res = TRUE;
+                res = TRUE; // unsupported
             } else {
                 if(!var1n) res = TRUE;
             }
+
         } else if(!strcmp(cond, "!!")) {
             if(var1) {
-                res = TRUE;
+                res = TRUE; // unsupported
             } else {
                 if(var1n) res = TRUE;
             }
+
         } else if(!strcmp(cond, "~") || !stricmp(cond, "complement")) {
             if(var1 && var2) {
-                res = TRUE;
+                res = TRUE; // unsupported
             } else {
                 if(~var1n) res = TRUE;
             }
+
         } else if(!stricmp(cond, "strncmp") || !stricmp(cond, "strnicmp") || !stricmp(cond, "strncasecmp")) {
             if(var1 && var2) {
                 if(sign) {
@@ -356,6 +424,7 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
             } else {
                 if((var1n & var2n) == var2n) res = TRUE;
             }
+
         } else if(!stricmp(cond, "ext") || !stricmp(cond, "extension")) {
             if(var1 && var2) {
                 p = strrchr(var1, '.');
@@ -369,6 +438,7 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
             } else {
                 res = TRUE;
             }
+
         } else if(!stricmp(cond, "basename")) {
             if(var1 && var2) {
                 #define check_condition_basename(X) \
@@ -390,6 +460,7 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
             } else {
                 res = TRUE;
             }
+
         } else if(!stricmp(cond, "filepath")) {
             if(var1 && var2) {
                 #define check_condition_filepath(X) \
@@ -423,6 +494,7 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
             } else {
                 res = TRUE;
             }
+
         } else if(!stricmp(cond, "filename")) {
             if(var1 && var2) {
                 s1 = mystrrchrs(var1, PATH_DELIMITERS);
@@ -439,6 +511,7 @@ int check_condition(int cmd, int res1, u8 *xcond, int res2) {
             } else {
                 res = TRUE;
             }
+
         } else {
             if(var1 && var2) {
                 fprintf(stderr, "\nError: invalid condition %s\n", cond);
@@ -512,6 +585,29 @@ int CMD_CLog_func(int cmd) {
 
 
 
+// this solution is a work-around for being able to use memcmp and memcmp_mask as function points instead of using redundant code and "if" statements
+u32 memcmp_mask_value = 0;
+__cdecl i32 memcmp_mask(const void *ptr1, const void *ptr2, size_t num) {
+    int     i;
+    u8      *a = (u8*)ptr1,
+            *b = (u8*)ptr2;
+    for(i = 0; i < num; i++) {
+        if(memcmp_mask_value & (u32)((u32)1 << (u32)i)) {
+            // ok, it's a \x?? byte
+        } else {
+            if(a[i] < b[i]) return -1;
+            if(a[i] > b[i]) return 1;
+        }
+    }
+    return 0;
+}
+
+
+
+i32  re_match(const char* pattern, const char* text, i32* matchlength);
+
+
+
 int CMD_FindLoc_func(int cmd) {
     static u8   *sign   = NULL,
                 *buff   = NULL;
@@ -524,7 +620,8 @@ int CMD_FindLoc_func(int cmd) {
             offset  = -1LL,
             str_len,
             sign_len,
-            endoff  = -1LL;
+            endoff  = -1LL,
+            buffsz; // not static
     u8      *str,
             *ret_if_error;
 
@@ -546,7 +643,11 @@ int CMD_FindLoc_func(int cmd) {
             idx = get_var_from_name(str, -1);
             if(idx >= 0) {
                 str     = get_var(idx);
-                str_len = strlen(str);
+                if(NUM(1) == BMS_TYPE_BINARY) {
+                    str_len = get_var_fullsz(idx);
+                } else {
+                    str_len = strlen(str);
+                }
             }
         }
 
@@ -572,6 +673,32 @@ int CMD_FindLoc_func(int cmd) {
         sign = realloc(sign, sign_len + 1);
         if(!sign) STD_ERR(QUICKBMS_ERROR_MEMORY);
         sign_len = utf8_to_utf16(str, str_len, sign, sign_len, 0);
+
+    } else if(NUM(1) == BMS_TYPE_REGEX) {
+        // all the code is here
+        buffsz = myfilesize(fd) - oldoff;
+        buff = realloc(buff, buffsz + 1);
+        if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        buffsz = myfr(fd, buff, buffsz, FALSE);
+        for(i = 0; i < buffsz; i++) {
+            if(!buff[i]) buff[i] = '\n';
+        }
+        i32 matchlength;
+        tmpoff = (u_int)-1LL;
+        if(
+            (endoff == (u_int)-1LL) // default till end of file
+         || (endoff > oldoff)       // if endoff is above current offset
+        ) {
+            tmpoff = re_match(str, buff, &matchlength);
+        } else if(endoff < oldoff) {
+            for(len = 0;; len += matchlength) {
+                len = re_match(str, buff + len, &matchlength);
+                if(len < 0) break;
+                tmpoff = len;
+            }
+        }
+        if(tmpoff >= 0) offset = oldoff + tmpoff;
+        goto quit;
 
     } else {
         sign_len = NUM(1);  // yeah the type in NUM(1) is written for having the size of the parameter, watch enum
@@ -607,12 +734,22 @@ int CMD_FindLoc_func(int cmd) {
         buff = malloc(BUFFSZ + 1);
         if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
     }
-    int buffsz = BUFFSZ;
+    buffsz = BUFFSZ;
     tmpoff = oldoff;
 
+    __cdecl i32 (*FindLoc_memcmp)(const void *, const void *, size_t) = memcmp;
+
+    if(NUM(1) == BMS_TYPE_STRING) {
+        FindLoc_memcmp = mymemicmp;
+    }
+    if(CMD.mask) {
+        memcmp_mask_value = CMD.mask;
+        FindLoc_memcmp = memcmp_mask;
+    }
+
     if(
-        (endoff == (u_int)-1LL)    // default till end of file
-     || (endoff > oldoff)   // if endoff is above current offset
+        (endoff == (u_int)-1LL) // default till end of file
+     || (endoff > oldoff)       // if endoff is above current offset
     ) {
         for(;;) {
             if(endoff == (u_int)-1LL) {
@@ -623,7 +760,7 @@ int CMD_FindLoc_func(int cmd) {
             len = myfr(fd, buff, buffsz, FALSE);
             if(len < sign_len) break;   // performes (len <= 0) too automatically
             for(i = 0; i <= (len - sign_len); i++) {
-                if(!memcmp(buff + i, sign, sign_len)) {
+                if(!FindLoc_memcmp(buff + i, sign, sign_len)) {
                     offset = (myftell(fd) - len) + i;
                     goto quit;
                 }
@@ -642,7 +779,7 @@ int CMD_FindLoc_func(int cmd) {
             len = myfr(fd, buff, buffsz, FALSE);
             if(len < sign_len) break;   // performes (len <= 0) too automatically
             for(i = (len - sign_len); i >= 0; i--) {
-                if(!memcmp(buff + i, sign, sign_len)) {
+                if(!FindLoc_memcmp(buff + i, sign, sign_len)) {
                     offset = (myftell(fd) - len) + i;
                     goto quit;
                 }
@@ -688,7 +825,7 @@ int CMD_GetBits_func(int cmd) {
         bitpos = 0;
     }
     if(bits <= INTSZ) { // INTSZ makes it compatible with quickbms_4gb_files till 64bit
-        tmpn = fd_read_bits(bits, &bitchr, &bitpos, fd);
+        tmpn = fd_read_bits(bits, &bitchr, &bitpos, fd, NULL);
     } else {
         len = ((bits + 7) & (~7)) / 8;
         tmp = calloc(len + 1, 1);
@@ -699,10 +836,12 @@ int CMD_GetBits_func(int cmd) {
 
     if(tmp) {
         if(g_verbose < 0) verbose_print(verbose_offset, "getbits", CMD.var[0], tmp, len, 0, bits);
+        if(g_debug_output) xdebug_print(verbose_offset, NULL     , CMD.var[0], tmp, len, 0, -bits);
         add_var(CMD.var[0], NULL, tmp, 0, len);
         FREE(tmp)
     } else {
         if(g_verbose < 0) verbose_print(verbose_offset, "getbits", CMD.var[0], NULL, 0, tmpn, bits);
+        if(g_debug_output) xdebug_print(verbose_offset, NULL     , CMD.var[0], NULL, 0, tmpn, -bits);
         add_var(CMD.var[0], NULL, NULL, tmpn, sizeof(int));
     }
     return 0;
@@ -732,7 +871,7 @@ int CMD_PutBits_func(int cmd) {
     if(bits <= INTSZ) { // INTSZ makes it compatible with quickbms_4gb_files till 64bit
         tmpn = VAR32(0);
         if(g_verbose < 0) verbose_print(verbose_offset, "putbits", CMD.var[0], NULL, 0, tmpn, bits);
-        fd_write_bits(tmpn, bits, &bitchr, &bitpos, fd);
+        fd_write_bits(tmpn, bits, &bitchr, &bitpos, fd, NULL);
     } else {
         len = ((bits + 7) & (~7)) / 8;
         tmp = VAR(0);
@@ -761,15 +900,22 @@ int CMD_Get_func(int cmd) {
     if(g_verbose < 0)  verbose_offset = myftell(fd);
     if(g_reimport < 0) verbose_offset = myftell(fd);    // necessary
 
+    if(CMD.var[3] >= 0) {
+        verbose_offset = myftell(fd);
+        myfseek(fd, VAR32(3), SEEK_SET);
+    }
+
     ret = myfrx(fd, type, &retn, &error);
     // now ret can be also NULL because myfrx is string/int
     //if(!ret) return -1;    // here should be good to quit... but I leave it as is for back compatibility with the old quickbms!
     if(error) return -1;
     if(ret) {
         if(g_verbose < 0) verbose_print(verbose_offset, "get", CMD.var[0], ret, -1, 0, type);
+        if(g_debug_output) xdebug_print(verbose_offset, NULL , CMD.var[0], ret, -1, 0, type);
         add_var(CMD.var[0], NULL, ret, 0, -1);
     } else {
         if(g_verbose < 0) verbose_print(verbose_offset, "get", CMD.var[0], NULL, 0, retn, type);
+        if(g_debug_output) xdebug_print(verbose_offset, NULL , CMD.var[0], NULL, 0, retn, type);
         add_var(CMD.var[0], NULL, NULL, retn, sizeof(int));
         if(type == BMS_TYPE_FLOAT) {
             float   tmp_float = 0;
@@ -798,7 +944,9 @@ int CMD_Get_func(int cmd) {
             VARVAR(0).reimport.offset   = verbose_offset;
             VARVAR(0).reimport.fd       = fd;
             VARVAR(0).reimport.type     = type;
-            if(g_filexor.size > 0) VARVAR(0).reimport.use_filexor = g_filexor.cmd;  // check in case TOC is encrypted and data isn't
+            if(fdnum_uses_filexor(fd, &g_filexor)) {
+                VARVAR(0).reimport.use_filexor = g_filexor.cmd;  // check in case TOC is encrypted and data isn't
+            }
             if(myftell(fd) == verbose_offset) {
                 if(g_reimport_shrink_enlarge && (type == BMS_TYPE_ASIZE)) {
                     // ok, we need to reset the size
@@ -808,6 +956,10 @@ int CMD_Get_func(int cmd) {
             }
             // no need to set the variable as "valid" for reimport2, type will be BMS_TYPE_NONE
         }
+    }
+
+    if(CMD.var[3] >= 0) {
+        myfseek(fd, verbose_offset, SEEK_SET);
     }
     return 0;
 }
@@ -829,13 +981,39 @@ int CMD_IDString_func(int cmd) {
     myalloc(&buff, len, &buffsz);   // memcmp, so not + 1
     if(g_verbose < 0) verbose_offset = myftell(fd);
     myfr(fd, buff, len, TRUE);
-    if(memcmp(buff, sign, len)) {
-        if((len == 4) &&    // automatic endianess... cool
-           (buff[0] == sign[3]) && (buff[1] == sign[2]) && 
-           (buff[2] == sign[1]) && (buff[3] == sign[0])) {
-            g_endian = (g_endian == MYLITTLE_ENDIAN) ? MYBIG_ENDIAN : MYLITTLE_ENDIAN;
-            return 0;
+
+    int     ret = -1;
+    if(CMD.mask) {
+        memcmp_mask_value = CMD.mask;
+        if(!memcmp_mask(buff, sign, len)) {
+            ret = 0;
+        } else {
+            if((len == 4)   // automatic endianess... cool
+             && ((CMD.mask & (1<<3)) || (buff[0] == sign[3]))
+             && ((CMD.mask & (1<<2)) || (buff[1] == sign[2]))
+             && ((CMD.mask & (1<<1)) || (buff[2] == sign[1]))
+             && ((CMD.mask & (1<<0)) || (buff[3] == sign[0]))
+            ) {
+                g_endian = (g_endian == MYLITTLE_ENDIAN) ? MYBIG_ENDIAN : MYLITTLE_ENDIAN;
+                ret = 0;
+            }
         }
+    } else {
+        if(!memcmp(buff, sign, len)) {
+            ret = 0;
+        } else {
+            if((len == 4)   // automatic endianess... cool
+             && (buff[0] == sign[3])
+             && (buff[1] == sign[2])
+             && (buff[2] == sign[1])
+             && (buff[3] == sign[0])
+            ) {
+                g_endian = (g_endian == MYLITTLE_ENDIAN) ? MYBIG_ENDIAN : MYLITTLE_ENDIAN;
+                ret = 0;
+            }
+        }
+    }
+    if(ret < 0) {
         /*
         fprintf(stderr, "\n"
             "- signature doesn't match the one expected by the script:\n"
@@ -857,7 +1035,8 @@ int CMD_IDString_func(int cmd) {
         show_dump(2, sign, len, stderr);
         return -1;
     }
-    if(g_verbose < 0) verbose_print(verbose_offset, "idstr  ", CMD.var[0], buff, len, 0, len);
+    if(g_verbose < 0) verbose_print(verbose_offset, "idstr  ", -1, buff, len, 0, len);
+    if(g_debug_output) xdebug_print(verbose_offset, NULL     , -1, buff, len, 0, 0);
     return 0;
 }
 
@@ -939,6 +1118,29 @@ int old_set_math_operator(u8 **data) {
     // no restrictions here
     if(*p == '?') { // this is an "else" from the previous SET_MATH_OPERATOR_ASSIGN
         p++;
+
+        // copy&paste from above, just in case...
+        SET_MATH_OPERATOR_ASSIGN("<<<", 'l')
+        SET_MATH_OPERATOR_ASSIGN(">>>", 'r')
+        SET_MATH_OPERATOR_ASSIGN("**", 'p')
+        SET_MATH_OPERATOR_ASSIGN("//", 'v')
+        SET_MATH_OPERATOR_ASSIGN("&&", 'x')
+        SET_MATH_OPERATOR_ASSIGN("<>", 'z')
+        SET_MATH_OPERATOR_ASSIGN("%%", -176)
+        SET_MATH_OPERATOR_ASSIGN("reverselong", -1000)
+        SET_MATH_OPERATOR_ASSIGN("reverseshort", -1001)
+        SET_MATH_OPERATOR_ASSIGN("reverselonglong", -1002)
+        SET_MATH_OPERATOR_ASSIGN("rol8",  -1010)
+        SET_MATH_OPERATOR_ASSIGN("rol16", -1011)
+        SET_MATH_OPERATOR_ASSIGN("rol32", -1012)
+        SET_MATH_OPERATOR_ASSIGN("rol64", -1013)
+        SET_MATH_OPERATOR_ASSIGN("ror8",  -1014)
+        SET_MATH_OPERATOR_ASSIGN("ror16", -1015)
+        SET_MATH_OPERATOR_ASSIGN("ror32", -1016)
+        SET_MATH_OPERATOR_ASSIGN("ror64", -1017)
+        SET_MATH_OPERATOR_ASSIGN("imul", -1018)
+        SET_MATH_OPERATOR_ASSIGN("mul", -1019)
+        //
 
         SET_MATH_OPERATOR_ASSIGN("add", '+')
         SET_MATH_OPERATOR_ASSIGN("mul", '*')
@@ -1140,7 +1342,11 @@ int old_set_math_operator(u8 **data) {
         SET_MATH_OPERATOR_ASSIGN("fmaf", -174)
         SET_MATH_OPERATOR_ASSIGN("fmal", -175)
         SET_MATH_OPERATOR_ASSIGN("perc", -176)
-        {} // else
+        //{} // else
+        {
+            ret = tolower(*p);
+            p++;
+        }
     } else {
         ret = tolower(*p);
         p++;
@@ -1744,6 +1950,7 @@ int calcc(int cmd, char *command, u64 input) {
             else calcc_BLA('?')
                 l = p;  // tmp
                 op = old_set_math_operator((u8 **)&l);
+                workaround = (l - p) - 1;   // -1 for the next ++p in right
             }
             else break;
 
@@ -1859,7 +2066,7 @@ int CMD_NameCRC_func(int cmd) {
                 fd = xfopen(g_bms_script, "rb");
                 if(!fd) STD_ERR(QUICKBMS_ERROR_FILE_READ);
             } else {
-                if(!strnicmp(flist, MEMORY_FNAME, MEMORY_FNAMESZ)) {
+                if(is_MEMORY_FILE(flist)) {
                     mem_fd = get_memory_file(flist);
                     mem_bck_offset = myftell(mem_fd);
                 } else {
@@ -2077,7 +2284,7 @@ int CMD_SLog_func(int cmd) {
         g_reimport2_xsize  = -1;
     }
 
-    if(dumpa_slog(fd, name, offset, size, type) < 0) return -1;
+    if(dumpa_slog(fd, name, offset, size, type, CMD.var[5]) < 0) return -1;
     return 0;
 }
 
@@ -2176,6 +2383,7 @@ int CMD_GetDString_func(int cmd) {
     myfr(fd, buff, size, TRUE);
     buff[size] = 0;
     if(g_verbose < 0) verbose_print(verbose_offset, "getdstr", CMD.var[0], buff, size, 0, size);
+    if(g_debug_output) xdebug_print(verbose_offset, NULL     , CMD.var[0], buff, size, 0, 0);
     add_var(CMD.var[0], NULL, buff, 0, size);
     return 0;
 }
@@ -2186,7 +2394,11 @@ int CMD_ReverseShort_func(int cmd) {
     int     n;
 
     n = VAR32(0);
-    n = swap16(n);
+    switch(NUM(1)) {
+        case MYLITTLE_ENDIAN:   if(g_endian != MYLITTLE_ENDIAN) n = swap16(n);  break;
+        case MYBIG_ENDIAN:      if(g_endian != MYBIG_ENDIAN)    n = swap16(n);  break;
+        default:                                                n = swap16(n);  break;
+    }
     add_var(CMD.var[0], NULL, NULL, n, sizeof(int));
     return 0;
 }
@@ -2197,7 +2409,11 @@ int CMD_ReverseLong_func(int cmd) {
     int     n;
 
     n = VAR32(0);
-    n = swap32(n);
+    switch(NUM(1)) {
+        case MYLITTLE_ENDIAN:   if(g_endian != MYLITTLE_ENDIAN) n = swap32(n);  break;
+        case MYBIG_ENDIAN:      if(g_endian != MYBIG_ENDIAN)    n = swap32(n);  break;
+        default:                                                n = swap32(n);  break;
+    }
     add_var(CMD.var[0], NULL, NULL, n, sizeof(int));
     return 0;
 }
@@ -2208,7 +2424,11 @@ int CMD_ReverseLongLong_func(int cmd) {
     int     n;
 
     n = VAR32(0);
-    n = swap64(n);
+    switch(NUM(1)) {
+        case MYLITTLE_ENDIAN:   if(g_endian != MYLITTLE_ENDIAN) n = swap64(n);  break;
+        case MYBIG_ENDIAN:      if(g_endian != MYBIG_ENDIAN)    n = swap64(n);  break;
+        default:                                                n = swap64(n);  break;
+    }
     add_var(CMD.var[0], NULL, NULL, n, sizeof(int));
     return 0;
 }
@@ -2268,7 +2488,7 @@ int CMD_Set_func(int cmd) {
         i = get_var_from_name(var, varsz);
         if(i >= 0) {
             var = mystrdup_simple(get_var(i));
-            varsz = cstring(var, var, -1, NULL);
+            varsz = cstring(var, var, -1, NULL, NULL);
         }
 
     } else if(NUM(1) == BMS_TYPE_ALLOC) {
@@ -2337,9 +2557,20 @@ int CMD_Set_func(int cmd) {
         var_static = var = set_unicode32_to_utf8(VAR(2), VARSZ(2), NULL);
         varsz = -1;
 
+    } else if(NUM(1) == BMS_TYPE_ASIZE) {
+        varn = VARSZ(2);
+
+    } else if(NUM(1) == BMS_TYPE_STRING) {
+        var_static = var = VAR(2);
+        varsz = -1;
+
     } else {
         var_static = var = VAR(2);
         varsz = VARSZ(2);
+    }
+
+    if(varsz < 0) {
+        varsz = var ? strlen(var) : 0;
     }
 
     if(CMD.var[0] < 0) {    // MEMORY_FILE
@@ -2466,12 +2697,14 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
             show_dump(2, X, Y, fdo); \
         } else { \
             tmp = show_dump(2, X, Y, NULL); \
-            tmpsz = strlen(tmp); \
-            buffsz += tmpsz; \
-            myalloc(&buff, buffsz + 1, &buff_maxsz); \
-            memcpy(buff + buffsz - tmpsz, tmp, tmpsz); \
-            buff[buffsz] = 0; \
-            FREE(tmp) \
+            if(tmp) { \
+                tmpsz = strlen(tmp); \
+                buffsz += tmpsz; \
+                myalloc(&buff, buffsz + 1, &buff_maxsz); \
+                memcpy(buff + buffsz - tmpsz, tmp, tmpsz); \
+                buff[buffsz] = 0; \
+                FREE(tmp) \
+            } \
         } \
     }
     static int  buff_maxsz  = 0;
@@ -2488,7 +2721,8 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
             f_out,
             space,
             tmpsz,
-            buffsz;
+            buffsz,
+            did_color   = 0;
     u8      *p,
             *var,
             *tmp,
@@ -2505,17 +2739,16 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
             //if(!g_quiet) fprintf(stderr, "  ");
         }
         //for(i = 0; i < 77; i++) { // removed because useless
-        for(;;) {
-            if(!*msg) break;
+        while(*msg) {
             if(*msg == '%') {
                 msg++;
-                p = strchr(msg, '%');
-                if(!p) continue;
-                if(p == msg) {
+                if(*msg == '%') {
                     PRINT_FPUTC('%')
                     msg++;
                     continue;
                 }
+                p = strchr(msg, '%');
+                if(!p) continue;
                 hex       = 0;
                 c_out     = 0;
                 f_out     = 0;
@@ -2569,7 +2802,10 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
                     }
                 }
                 var = get_var(idx);
+
+                if(!var) var = "";
                 len = strlen(var);
+
                 if(force_len > 0) {
                     len = get_var_fullsz(idx);
                     if(force_len < len) len = force_len;
@@ -2623,6 +2859,40 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
                     }
                 }
                 msg = p + 1;
+
+            } else if(*msg == '{') {
+                msg++;
+                if(*msg == '{') {
+                    PRINT_FPUTC('{')
+                    msg++;
+                    continue;
+                }
+                char    rbg_tmp[32];
+                idx = 0;
+                if(*msg == '/') {   // restore (useless, just like {white}test{/white} == {white}test{}
+                    msg++;
+                    idx = 1;
+                }
+                p = strchr(msg, '}');
+                if(!p || ((p - msg) >= (sizeof(rbg_tmp) - 1))) {
+                    PRINT_FPUTC('{')
+                    if(idx) PRINT_FPUTC('/')
+                    continue;
+                }
+                memcpy(rbg_tmp, msg, p - msg);
+                rbg_tmp[p - msg] = 0;
+                if(ansi_colors(rbg_tmp) < 0) {
+                    ansi_colors(NULL);
+                    PRINT_FPUTC('{')
+                    if(idx) PRINT_FPUTC('/')
+                    continue;
+                }
+                if(idx) {   // restore
+                    ansi_colors(NULL);
+                }
+                did_color = 1;
+                msg = p + 1;
+
             } else {
                 if(*msg == '\n') {
                     msg++;
@@ -2634,6 +2904,11 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
         }
         if(fdo) fputc('\n', fdo);
     }
+
+    if(did_color) {
+        ansi_colors(NULL);
+    }
+
     if(fdo) {
         //if(!g_quiet) fprintf(stderr, "\n");
         return NULL;
@@ -2648,40 +2923,98 @@ u8 *mydown_hex2uri(u8 *uri);
 
 
 
+u8 *String_stristr(u8 *var1, u8 *var2, int len1, int len2) {
+    if(!var1 || !var2) return NULL;
+    u8  *p = (u8 *)mymemmem(var1, var2, len1, len2);
+    u8  *s = (u8 *)strnistr(var1, len1, var2, len2);
+    if(!p && !s) return NULL;
+    if(!p) p = s;
+    if(s < p) p = s;
+    return p;
+}
+
+
+
+u8 *String_strristr(u8 *var1, u8 *var2, int len1, int len2) {
+    if(!var1 || !var2) return NULL;
+    u8  *p = (u8 *)mymemrmem(var1, var2, len1, len2);
+    u8  *s = (u8 *)strrnistr(var1, len1, var2, len2);
+    if(!p && !s) return NULL;
+    if(!p) p = s;
+    if(s > p) p = s;
+    return p;
+}
+
+
+
+int String_realloc(u8 **var1, int *len1, int len2) {
+    int     t = 0;
+    if(len1) t = *len1;
+
+    if(t    < 0) ALLOC_ERR;
+    if(len2 < 0) ALLOC_ERR;
+
+    if(len2 > t) {
+        t = len2;
+        MAX_ALLOC_CHECK(t);
+        *var1 = realloc(*var1, t + 1);
+        if(!*var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
+    } else {
+        t = len2;
+    }
+    (*var1)[t] = 0; // not needed due to var1[len1]=0 at the end
+    if(len1) *len1 = t;
+    return t;
+}
+
+
+
 int CMD_String_func(int cmd) {
     static u8   *var1   = NULL;
     int     i,
             op,
             len1,
+            len1f,
             len2,
+            len2f,
             quote       = 0,
             num         = 0,
-            fixed_len   = -1,
+            //fixed_len   = -1,     // no longer used because it's now all binary
             error_mode  = 0,
             args,
-            tmp[MAX_ARGS + 1];
-    u8      args_format[10],
-            *var2,
+            t;
+    u8      *var2,
             *p,
             *l;
 
-    len1 = VARSZ(0);    // string/binary alternative to re_strdup
-    MAX_ALLOC_CHECK(len1);
-    var1 = realloc(var1, len1 + 1);
-    if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
+    len1  = VARSZ(0);    // string/binary alternative to re_strdup
+    len1f = VARSZF(0);
+
+    // work with a copy
+    len1 = String_realloc(&var1, NULL, (len1 > len1f) ? len1 : len1f);
     memcpy(var1, VAR(0), len1);
     var1[len1] = 0;
     //re_strdup(&var1, VAR(0), NULL);   // needed for editing
+
     op   = NUM(1);
     var2 = VAR(2);
+    len2f = VARSZF(2);
 
-    if(op < 0) {
+    if(op < 0) {    // '0' for binary and error mode
         error_mode = 1;
         op = -op;
     }
 
-    len1 = strlen(var1);
-    len2 = strlen(var2);
+    // binary compatibility introduced in QuickBMS 0.11 with "0" prefix
+    if(error_mode) {
+        len1 = len1f;
+        len2 = len2f;
+    } else {
+        // NUL-delimited strings by default (leave the previous code as-is)
+        len1 = strlen(var1);
+        len2 = strlen(var2);
+    }
+
     if(var_is_a_constant_string(CMD.var[2])) {
         // do nothing because it's a string
     } else {
@@ -2692,44 +3025,37 @@ int CMD_String_func(int cmd) {
             case '=': {
                 if(num) {
                     len2 = sizeof(int);
-                    var2 = (u8 *)&num;
+                    var2 = alloca(len2);    // on the stack
+                    putxx(var2, num, len2);
+                    //var2 = (u8 *)&num;    // not platform compatible
                 }
-
-                MAX_ALLOC_CHECK(len2);
-                var1 = realloc(var1, len2 + 1);
-                if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
+                String_realloc(&var1, &len1, len2);
                 memcpy(var1, var2, len2);
-                var1[len2] = 0;
-                fixed_len = len2;
                 break;
             }
             case '+': {
-                tmp[0] = len1 + len2;
-                if(tmp[0] < len1) ALLOC_ERR;
-                if(tmp[0] < len2) ALLOC_ERR;
-                MAX_ALLOC_CHECK(tmp[0]);
-                var1 = realloc(var1, tmp[0] + 1);
-                if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
-                strcpy(var1 + len1, var2);
+                String_realloc(&var1, &len1, len1 + len2);
+                memcpy(var1 + len1 - len2, var2, len2);
                 break;
             }
             case '-': { // I know that this is not the same method used in BMS but you can't "substract" a string from the end of another... it means nothing!
                 if(num > 0) {
                     if(num <= len1) {
-                        var1[len1 - num] = 0;
+                        len1 -= num;
                     } else {
-                        if(error_mode) var1[0] = 0;
+                        if(error_mode) len1 = 0;
                     }
                 } else if(num < 0) {
-                    num = -num;
+                    num = myabs(num);
                     if(num <= len1) {
-                        var1[num] = 0;
+                        len1 = num;
                     } else {
-                        if(error_mode) var1[0] = 0;
+                        if(error_mode) len1 = 0;
                     }
                 } else {
-                    while((p = (u8 *)stristr(var1, var2))) {
-                        mymemmove(p, p + len2, -1);
+                    while((p = String_stristr(var1, var2, len1, len2))) {
+                        mymemmove(p, p + len2, len1 - ((p + len2) - var1));
+                        len1 -= len2;
                     }
                 }
                 break;
@@ -2739,32 +3065,33 @@ int CMD_String_func(int cmd) {
                     for(i = 0; i < len1; i++) {
                         var1[i] ^= var2[i % len2];
                     }
-                    fixed_len = len1; // necessary if 1^2=0
+                    //fixed_len = len1; // necessary if 1^2=0
                 } else {
-                    if(error_mode) var1[0] = 0;
+                    if(error_mode) len1 = 0;
                 }
                 break;
             }
             case '<': { // var1="thisisastring" var2="4" = "isastring"
                 if(num > 0) {
                     if(num <= len1) {
-                        mymemmove(var1, var1 + num, -1);
+                        mymemmove(var1, var1 + num, len1 -= num);
                     } else {
-                        if(error_mode) var1[0] = 0;
+                        if(error_mode) len1 = 0;
                     }
                 } else if(num < 0) {
-                    num = -num;
+                    num = myabs(num);
                     if(num <= len1) {
-                        mymemmove(var1, var1 + len1 - num, -1);
+                        mymemmove(var1, var1 + len1 - num, num);
+                        len1 = num;
                     } else {
-                        if(error_mode) var1[0] = 0;
+                        if(error_mode) len1 = 0;
                     }
                 } else {
-                    p = (u8 *)strristr(var1, var2);
+                    p = String_strristr(var1, var2, len1, len2);
                     if(p) {
-                        p[len2] = 0;
+                        len1 = (p + len2) - var1;
                     } else {
-                        if(error_mode) var1[0] = 0;
+                        if(error_mode) len1 = 0;
                     }
                 }
                 break;
@@ -2772,18 +3099,20 @@ int CMD_String_func(int cmd) {
             //case '/': 
             case '*': {
                 if(num > 0) {
-                    p = mystrdup_simple(var1);
-                    len2 = len1;
-                    len1 = 0;
-                    var1[len1] = 0;
+                    t = len1;
+                    String_realloc(&var1, &len1, len1 * num);
                     for(i = 0; i < num; i++) {
-                        if((len1 + len2 + 1) < len1) break;
-                        var1 = realloc(var1, len1 + len2 + 1);
-                        if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
-                        strcat(var1, p);
-                        len1 += len2;
+                        memcpy(var1 + (t * i), var1, t);
                     }
-                    FREE(p)
+                } else if(num < 0) {
+                    num = myabs(num);
+                    if(num > 0) {
+                        t = len1;
+                        String_realloc(&var1, &len1, len1 + num);
+                        for(i = 0; i < num; i++) {
+                            var1[t + i] = var1[i];
+                        }
+                    }
                 } else {
                     /* removed because useless
                     // ???
@@ -2791,177 +3120,145 @@ int CMD_String_func(int cmd) {
                         var1[i] = var2[i % len2];
                     }
                     */
-                    p = (u8 *)stristr(var1, var2);
+                    p = String_stristr(var1, var2, len1, len2);
                     if(p) {
-                        p[len2] = 0;
+                        len1 = (p + len2) - var1;
                     } else {
-                        if(error_mode) var1[0] = 0;
+                        if(error_mode) len1 = 0;
                     }
                 }
                 break;
             }
             case '%': {
                 if(num > 0) {
-                    var1[len1 % num] = 0;
+                    len1 %= num;
+                /*} else if(num < 0) {
+                    num = myabs(num);
+                    if(num) len1 -= (len1 % num);*/
                 } else {
-                    p = (u8 *)stristr(var1, var2);
+                    p = String_stristr(var1, var2, len1, len2);
                     if(p) {
-                        *p = 0;
+                        len1 = p - var1;
                     } else {
-                        if(error_mode) var1[0] = 0;
+                        if(error_mode) len1 = 0;
                     }
                 }
                 break;
             }
             case '&': { // var1="thisisastring" var2="isa" = "isastring"
-                //if(num > 0) {
-                    //var1[len1 & num] = 0; // use % for this job, & means nothing
-                //} else {
-                    p = (u8 *)stristr(var1, var2);
-                    if(p) {
-                        mymemmove(var1, p, -1);
-                    } else {
-                        if(error_mode) var1[0] = 0;
-                    }
-                //}
+                p = String_stristr(var1, var2, len1, len2);
+                if(p) {
+                    mymemmove(var1, p, len1 -= (p - var1));
+                } else {
+                    if(error_mode) len1 = 0;
+                }
                 break;
             }
             case '|': { // var1="thisisastring" var2="isa" = "string"
-                p = (u8 *)stristr(var1, var2);
+                p = String_stristr(var1, var2, len1, len2);
                 if(p) {
-                    mymemmove(var1, p + len2, -1);
+                    mymemmove(var1, p + len2, len1 -= ((p + len2) - var1));
                 } else {
-                    if(error_mode) var1[0] = 0;
+                    if(error_mode) len1 = 0;
                 }
                 break;
             }
             case '$': {
-                p = (u8 *)strristr(var1, var2);
+                p = String_strristr(var1, var2, len1, len2);
                 if(p) {
-                    mymemmove(var1, p, -1);
+                    mymemmove(var1, p, len1 -= (p - var1));
                 } else {
-                    if(error_mode) var1[0] = 0;
+                    if(error_mode) len1 = 0;
                 }
                 break;
             }
             case '!': {
-                p = (u8 *)strristr(var1, var2);
+                p = String_strristr(var1, var2, len1, len2);
                 if(p) {
-                    mymemmove(var1, p + len2, -1);
+                    mymemmove(var1, p + len2, len1 -= ((p + len2) - var1));
                 } else {
-                    if(error_mode) var1[0] = 0;
+                    if(error_mode) len1 = 0;
                 }
                 break;
             }
             case '>': { // var1="thisisastring" var2="isa" = "this" (from end)
                 if(num > 0) {
                     if(num <= len1) {
-                        var1[len1 - num] = 0;
+                        len1 -= num;
                     } else {
-                        if(error_mode) var1[0] = 0;
+                        if(error_mode) len1 = 0;
                     }
-                } else {
-                    p = (u8 *)strristr(var1, var2);
-                    if(p) {
-                        *p = 0;
+                /*} else if(num < 0) {  // just like negative < so remove it
+                    num = myabs(num);
+                    if(num <= len1) {
+                        mymemmove(var1, var1 + len1 - num, num);
+                        len1 = num;
                     } else {
-                        if(error_mode) var1[0] = 0;
+                        if(error_mode) len1 = 0;
+                    }*/
+                } else {
+                    p = String_strristr(var1, var2, len1, len2);
+                    if(p) {
+                        len1 = p - var1;
+                    } else {
+                        if(error_mode) len1 = 0;
                     }
                 }
                 break;
             }
             case 'r': {
-                len1 = len2;
-                MAX_ALLOC_CHECK(len1);
-                var1 = realloc(var1, len1 + 1);
-                if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
+                String_realloc(&var1, &len1, len2);
                 for(i = 0; i < len1; i++) {
                     var1[i] = var2[(len1 - i) - 1];
                 }
-                var1[i] = 0;
                 break;
             }
-            case 'b':
-                len2 = VARSZ(2);    // binary stuff
-            case 'B': {
-                len1 = (len2 * 2) + 1;  // +1 is necessary for byte2hex
-                if(len1 < len2) ALLOC_ERR;
-                MAX_ALLOC_CHECK(len1);
-                var1 = realloc(var1, len1 + 1);
-                if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
+            case 'B':
+                //len1 = strlen(var1);    // string
+                len2 = strlen(var2);    // string
+            case 'b': {
+                String_realloc(&var1, &len1, len2 * 2);
                 len1 = byte2hex(var2, len2, var1, len1, 1);
                 if(len1 < 0) len1 = 0;
-                var1[len1] = 0; // already done by byte2hex
                 break;
             }
             case 'h': {
-                len1 = len2;
-                if(len1) len1 /= 2;
-                MAX_ALLOC_CHECK(len1);
-                var1 = realloc(var1, len1 + 1);
-                if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
-                fixed_len = unhex(var2, len2, var1, len1);
-                if(fixed_len < 0) fixed_len = 0;
-                var1[fixed_len] = 0;
+                String_realloc(&var1, &len1, len2 / 2);
+                t = unhex(var2, len2, var1, len1);
+                len1 = (t < 0) ? 0 : t;
                 break;
             }
-            case 'e':
-                len1 = VARSZ(0);    // binary stuff
-                len2 = VARSZ(2);    // binary stuff
-            case 'E': {
-                if(len1 < len2) {
-                    len1 = len2;
-                    MAX_ALLOC_CHECK(len1);
-                    var1 = realloc(var1, len1 + 1);
-                    if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
-                    var1[len1] = 0;
-                }
+            case 'E':
+                len1 = strlen(var1);    // string
+                len2 = strlen(var2);    // string
+            case 'e': {
+                String_realloc(&var1, &len1, len2);
                 memcpy(var1, var2, len1);
-                fixed_len = perform_encryption(var1, len1);
-                if(fixed_len < 0) fixed_len = len1;
-                var1[fixed_len] = 0;
+                t = perform_encryption(var1, len1);
+                if(t >= 0) len1 = t;  // keep len1 intact if fails
                 break;
             }
-            case 'c':
-                len1 = VARSZ(0);    // binary stuff
-                len2 = VARSZ(2);    // binary stuff
-            case 'C': {
-                if(len1 < len2) {   // at least equal in length
-                    len1 = len2;
-                    MAX_ALLOC_CHECK(len1);
-                    var1 = realloc(var1, len1 + 1);
-                    if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
-                    var1[len1] = 0;
-                }
-                fixed_len = perform_compression(var2, len2, &var1, len1, &len1, 0);
-                if(fixed_len < 0) fixed_len = len1;
-                var1[fixed_len] = 0;
+            case 'C':
+                len1 = strlen(var1);    // string
+                len2 = strlen(var2);    // string
+            case 'c': {
+                String_realloc(&var1, &len1, len2);
+                t = perform_compression(var2, len2, &var1, len1, &len1, 0);
+                if(t >= 0) len1 = t;  // keep len1 intact if fails
                 break;
             }
             case 'u': {
-                if(len1 < len2) {
-                    len1 = len2;
-                    MAX_ALLOC_CHECK(len1);
-                    var1 = realloc(var1, len1 + 1);
-                    if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
-                }
+                String_realloc(&var1, &len1, len2);
                 for(i = 0; i < len2; i++) {
                     var1[i] = toupper(var2[i]);
                 }
-                var1[i] = 0;
                 break;
             }
             case 'l': {
-                if(len1 < len2) {
-                    len1 = len2;
-                    MAX_ALLOC_CHECK(len1);
-                    var1 = realloc(var1, len1 + 1);
-                    if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
-                }
+                String_realloc(&var1, &len1, len2);
                 for(i = 0; i < len2; i++) {
                     var1[i] = tolower(var2[i]);
                 }
-                var1[i] = 0;
                 break;
             }
             case 'R': {
@@ -2969,6 +3266,7 @@ int CMD_String_func(int cmd) {
                 break;
             }
             case 'p': { // *printf-like
+                u8      args_format[10];
                 len1 = 0;
                 FREE(var1)    // oh yeah this sux, that's why I classify it as experimental work-around
                 if(!var2) var2 = "";
@@ -3155,12 +3453,14 @@ int CMD_String_func(int cmd) {
             case 'P': {
                 p = do_print_cmd(var2, NULL);
                 mystrdup(&var1, p);
+                len1 = -1;
                 break;
             }
             case 's': { // *scanf-like, experimental and potentially dangerous
                 args = quick_check_printf_32bit_nums(var2); // only 32bit numbers are allowed at the moment!
                 if((args >= 0) && var1 && var2) {
                     if(args > NUM(0)) args = NUM(0);
+                    int tmp[MAX_ARGS + 1];
                     memset(&tmp, 0, sizeof(tmp));
                     sscanf(var1, var2,  // do not check the return value
                         &tmp[0], &tmp[1], &tmp[2], &tmp[3],
@@ -3169,8 +3469,9 @@ int CMD_String_func(int cmd) {
                     for(i = 0; i < args; i++) {
                         add_var(CMD.var[3 + i], NULL, NULL, tmp[i], sizeof(int));
                     }
+                    len1 = -1;
                 } else {
-                    if(error_mode) var1[0] = 0;
+                    if(error_mode) len1 = 0;
                 }
                 break;
             }
@@ -3208,17 +3509,24 @@ int CMD_String_func(int cmd) {
                     p = l;
                 }
                 mystrdup(&var1, myitoa(i)); // number of elements
+                len1 = -1;
                 break;
             }
             case 'x': {
-                mystrdup(&var1, var2);
-                fixed_len = cstring(var1, var1, -1, NULL);
+                malloc_copy((void **)&var1, var2, len1 = len2);
+                len1 = cstring(var1, var1, -1, NULL, NULL);
+                break;
+            }
+            case 'H': {
+                p = string_to_C(var2, len2, &len1, error_mode ? 1 : 0);
+                mystrdup(&var1, p);
+                // p is static!
                 break;
             }
             case 'f': {
-                mystrdup(&var1, var2);
-                for(p = var1; *p; p++) {
-                    if(!myisalnum(*p)) *p = '_';
+                malloc_copy((void **)&var1, var2, len1 = len2);
+                for(i = 0; i < len1; i++) {
+                    if(!myisalnum(var1[i])) var1[i] = '_';
                 }
                 break;
             }
@@ -3234,37 +3542,37 @@ int CMD_String_func(int cmd) {
                     math_setkey(&math_tmp, var2, NULL);
                     math_crypt(&math_tmp, var1, len1);
                 }
-                fixed_len = len1;
                 break;
             }
             case 'w': {
                 p = mydown_hex2uri(var2);
                 mystrdup(&var1, p);
                 real_free(p);
+                len1 = -1;
                 break;
             }
             case 'W': {
                 p = mydown_uri2hex(var2);
                 mystrdup(&var1, p);
                 real_free(p);
+                len1 = -1;
                 break;
             }
             case 't': {
-                len1 = len2 * 2;    // worst case scenario
-                var1 = realloc(var1, len1 + 1);
-                de_html(var2, len2, var1, len1);
+                String_realloc(&var1, &len1, len2 * 2);
+                len1 = de_html(var2, len2, var1, len1);
                 break;
             }
             case 'T': {
-                len1 = len2 * 2;    // worst case scenario
-                var1 = realloc(var1, len1 + 1);
-                html_easy(var2, len2, var1, len1);
+                String_realloc(&var1, &len1, len2 * 2);
+                len1 = html_easy(var2, len2, var1, len1);
                 break;
             }
             case '_': {
                 p = mystrdup_simple(var2);
                 mystrdup(&var1, skip_delimit(p));
                 FREE(p);
+                len1 = -1;
                 break;
             }
             case '.': {
@@ -3277,11 +3585,12 @@ int CMD_String_func(int cmd) {
                 for(p = l = var1; *l; p++,l++) {
                     if(strchr(string_trim_allow, *l)) *p = *l;
                 }
-                *p = 0;
+                len1 = p - var1;
                 break;
             }
             case 'J': {
                 mystrdup(&var1, json_viewer(var2)); // json_viewer returns a static buffer
+                len1 = -1;
                 break;
             }
             case 'X': {
@@ -3290,6 +3599,7 @@ int CMD_String_func(int cmd) {
                 xml_json_parser(var2, var2 + len2, -1, -1, -1, &ctx, NULL);
                 mystrdup(&var1, ctx.names);
                 xml_json_parser_free(&ctx);
+                len1 = -1;
                 break;
             }
             case 'v': {
@@ -3324,28 +3634,29 @@ int CMD_String_func(int cmd) {
                     p = l;
                 }
                 mystrdup(&var1, myitoa(i)); // number of elements
+                len1 = -1;
                 break;
             }
             case 'n': {
-                var1 = realloc(var1, (len2 * (3 + 1)) + 1);   // "255 "
+                String_realloc(&var1, &len1, len2 * (3 + 1));   // "255 "
                 var1[0] = 0;
                 p = var1;
                 for(i = 0; i < len2; i++) {
                     p += sprintf(p, "%d ", var2[i]);
                 }
+                len1 = p - var1;
                 break;
             }
             case 'N': {
-                p = numbers_to_bytes(var2, &fixed_len, 0, 0);
-                var1 = realloc(var1, fixed_len);
-                if(p) memcpy(var1, p, fixed_len);
+                p = numbers_to_bytes(var2, &len2, 0, 0);
+                String_realloc(&var1, &len1, len2);
+                if(p) memcpy(var1, p, len1);
                 // do NOT free p, it's static
                 break;
             }
             case 'U': {
-                var1 = realloc(var1, len2 + 1);
-                if(!var1) STD_ERR(QUICKBMS_ERROR_MEMORY);
-                fixed_len = unbase64(var2, len2, var1, len2);
+                String_realloc(&var1, &len1, len2);
+                len1 = unbase64(var2, len2, var1, len2);
                 break;
             }
             default: {
@@ -3354,7 +3665,9 @@ int CMD_String_func(int cmd) {
                 break;
             }
         }
-        add_var(CMD.var[0], NULL, var1, 0, fixed_len);
+        // if len is negative, it will be used as NUL-delimited string
+        if(len1 >= 0) var1[len1] = 0;
+        add_var(CMD.var[0], NULL, var1, 0, len1);
     }
     return 0;
 }
@@ -3425,7 +3738,7 @@ int CMD_Open_func(int cmd) {
     fdir    = VAR(0);
 
     if(CMD.var[1] < 0) {    // if we used: open -1
-        if(fdir && !strnicmp(fdir, MEMORY_FNAME, MEMORY_FNAMESZ)) {
+        if(is_MEMORY_FILE(fdir)) {
             g_replace_fdnum0 = get_memory_file(fdir);
         } else {
             g_replace_fdnum0 = VAR32(0);
@@ -3542,6 +3855,7 @@ int CMD_GetCT_func(int cmd) {
     tmp = fgetss(fd, VAR32(2), (NUM(1) == BMS_TYPE_UNICODE) ? 1 : 0, 0);
     if(!tmp) return -1;    // compability with old quickbms
     if(g_verbose < 0) verbose_print(verbose_offset, "getct", CMD.var[0], tmp, -1, 0, VAR32(2));
+    if(g_debug_output) xdebug_print(verbose_offset, NULL   , CMD.var[0], tmp, -1, 0, 0);
     add_var(CMD.var[0], NULL, tmp, 0, -1); // fgetss is handled as a string function at the moment
     return 0;
 }
@@ -3550,7 +3864,7 @@ int CMD_GetCT_func(int cmd) {
 
 int CMD_ComType_func(int cmd, char *arg_algo, void *arg_dictionary, int arg_dictionary_len) {
     int     idx;
-    u8      tmp_str[32],
+    u8      *tmp_str = NULL,
             *str;
 
     FREE(g_comtype_dictionary)
@@ -3560,26 +3874,24 @@ int CMD_ComType_func(int cmd, char *arg_algo, void *arg_dictionary, int arg_dict
         str = arg_algo;
         g_comtype_dictionary     = arg_dictionary;
         g_comtype_dictionary_len = arg_dictionary_len;
-        goto skip_arg_init;
-    }
+    } else {
+        str = STR(0);
+        str = skip_delimit(str);
+        g_comtype_dictionary     = STR(1);
+        g_comtype_dictionary_len = NUM(1);
+        if((CMD.var[1] >= 0) && !g_comtype_dictionary) {
+            g_comtype_dictionary     = VAR(1);
+            g_comtype_dictionary_len = VAR32(2);
+        }
+        if(g_comtype_dictionary_len <= 0) g_comtype_dictionary = NULL;
 
-    str = STR(0);
-    str = skip_delimit(str);
-    g_comtype_dictionary     = STR(1);
-    g_comtype_dictionary_len = NUM(1);
-    if((CMD.var[1] >= 0) && !g_comtype_dictionary) {
-        g_comtype_dictionary     = VAR(1);
-        g_comtype_dictionary_len = VAR32(2);
+        // quick_var_from_name_check can be used only for
+        // instructions used in the same function or for
+        // data copied in other buffers because it's a
+        // temporary content!
+        idx = quick_var_from_name_check(&g_comtype_dictionary, &g_comtype_dictionary_len);
+        if(g_comtype_dictionary && (idx >= 0)) g_comtype_dictionary_len = get_var_fullsz(idx);
     }
-    if(g_comtype_dictionary_len <= 0) g_comtype_dictionary = NULL;
-
-    // quick_var_from_name_check can be used only for
-    // instructions used in the same function or for
-    // data copied in other buffers because it's a
-    // temporary content!
-    idx = quick_var_from_name_check(&g_comtype_dictionary, &g_comtype_dictionary_len);
-    if(g_comtype_dictionary && (idx >= 0)) g_comtype_dictionary_len = get_var_fullsz(idx);
-skip_arg_init:
     if(g_comtype_dictionary && (g_comtype_dictionary_len > 0)) {
         g_comtype_dictionary = malloc_copy(NULL, g_comtype_dictionary, g_comtype_dictionary_len + 1);
     } else {
@@ -3588,7 +3900,8 @@ skip_arg_init:
     }
 
     if(!stricmp(str, "?")) {
-        fgetz(tmp_str, sizeof(tmp_str), stdin,
+        tmp_str = alloca(32);
+        fgetz(tmp_str, 32, stdin,
             "\n- you must specify the compression algorithm to use:\n  ");
         str = tmp_str;
     }
@@ -3731,7 +4044,27 @@ skip_arg_init:
     else if(!stricmp(str, "DARKSECTOR_NOCHUNKS_COMPRESS") || !stricmp(str, "FASTLZAH_COMPRESS") || !stricmp(str, "EVOLUTION_COMPRESS") || !stricmp(str, "UNKNOWN6_COMPRESS")) g_compression_type = COMP_LZFX_COMPRESS;
     QUICK_COMP_ASSIGN2(LZHUFXR_COMPRESS, STALKER_LZA_COMPRESS)
     QUICK_COMP_ASSIGN2(LZSS0_COMPRESS, PUYO_LZ01_COMPRESS)
-    QUICK_COMP_ASSIGN2(DS_LZX_COMPRESS, LZ77WII_COMPRESS)
+    //QUICK_COMP_ASSIGN2(DS_LZX_COMPRESS, LZ77WII_COMPRESS)
+    else if(!stricmp(str, "LZ77WII_COMPRESS")) {
+        g_compression_type = COMP_DS_LZX_COMPRESS;
+        if(g_comtype_dictionary) {
+            switch(myatoi(g_comtype_dictionary)) {
+                case 0x00:  g_compression_type = COMP_COPY;             break;
+                case 0x10:  g_compression_type = COMP_DS_LZS_COMPRESS;  break;
+                case 0x11:  g_compression_type = COMP_DS_LZX_COMPRESS;  break;
+                case 0x28:
+                case 0x24:
+                case 0x22:
+                case 0x21:
+                case 0x20:  g_compression_type = COMP_DS_HUF_COMPRESS;  break;
+                case 0x30:  g_compression_type = COMP_DS_RLE_COMPRESS;  break;
+                case 0x40:  g_compression_type = COMP_DS_LZX_COMPRESS;  break;
+                case 0x4c:
+                case 0x654C:g_compression_type = COMP_DS_LZE_COMPRESS;  break;
+                default: break;
+            }
+        }
+    }
     QUICK_COMP_ASSIGN2(ZLIB_COMPRESS, ZLIBX_COMPRESS)
     QUICK_COMP_ASSIGN2(DEFLATE_COMPRESS, DEFLATEX_COMPRESS)
     QUICK_COMP_ASSIGN2(NCOMPRESS, NCOMPRESS42)
@@ -3756,7 +4089,7 @@ int CMD_FileXOR_func_internal(int cmd, filexor_t *fx) {
             curroff;
     u8      *tmp;
 
-    memset(fx, 0, sizeof(filexor_t));   // no free()
+    memcpy(fx, &g_filexor_reset, sizeof(filexor_t));    //memset(fx, 0, sizeof(filexor_t));   // no free()
     fx->cmd         = cmd;
     if(CMD.var[0] >= 0) {
         NUMS2BYTES(VAR(0), CMD.num[1], CMD.str[0], CMD.num[0], 0)
@@ -3765,11 +4098,14 @@ int CMD_FileXOR_func_internal(int cmd, filexor_t *fx) {
     fx->size        = NUM(1);
     if(fx->size > 0) {
         fx->pos     = &NUM(2);
-        fd          = FILEZ(4); // not implemented
-        if(CMD.var[3] >= 0) pos_offset = VAR32(3);
-        else                pos_offset = myftell(fd);
+        fx->fd      = FILEZ(4);
+
+        // MAX_FILES is a magic value, it means any file and uses the position of file 0
+        fd          = (fx->fd < -MAX_FILES) ? 0 : fx->fd;
+
+        curroff = myftell(fd);
+        pos_offset = (CMD.var[3] >= 0) ? VAR32(3) : curroff;
         /*if(pos_offset >= 0)*//*allow negative offsets like in Ubersoldier*/ {
-            curroff = myftell(fd);
             if(curroff >= pos_offset) {
                 (*fx->pos) = curroff - pos_offset;
             } else {
@@ -3873,7 +4209,7 @@ int CMD_PutVarChr_func(int cmd) {
         varsz = VARSZ(0);
     }
     offset = VAR32(1);
-    num    = (int)get_var_ptr_cmd(-1, cmd, 2, 0, NULL);
+             get_var_ptr_cmd(-1, cmd, 2, 0, NULL, &num);
     //num    = VAR32(2);
     numsz  = NUM(3);
     if(numsz < 0) {  // so anything but BMS_TYPE_LONG, BMS_TYPE_SHORT, BMS_TYPE_BYTE, BMS_TYPE_THREEBYTE
@@ -3914,13 +4250,62 @@ int CMD_Debug_func(int cmd) {
 }
 
 
+
 int CMD_Append_func(int cmd) {
     int     direction = 0;
+    u8      *p;
 
-    if(CMD.var[0] >= 0) direction = VAR32(0);
-    g_append_mode = !g_append_mode;
-    if(direction < 0) g_append_mode = APPEND_MODE_BEFORE;
-    if(direction > 0) g_append_mode = APPEND_MODE_OVERWRITE;
+    if(g_append_mode == APPEND_MODE_NONE) {
+        g_append_mode = APPEND_MODE_APPEND; // enable default
+    } else {
+        g_append_mode = APPEND_MODE_NONE;   // disable
+    }
+
+    if(CMD.var[0] >= 0) {
+        p = VAR(0);
+        if(p) {
+                 if(stristr(p, "before"))    direction = -1;
+            else if(stristr(p, "append"))    direction = 0;
+            else if(stristr(p, "overwrite")) direction = 1;
+            else if(stristr(p, "insert"))    direction = 2;
+            else direction = VAR32(0);
+        } else {
+            direction = VAR32(0);
+        }
+
+        switch(direction) {
+            case -1: g_append_mode = APPEND_MODE_BEFORE;    break;
+            case  0: g_append_mode = APPEND_MODE_APPEND;    break;  // default
+            case  1: g_append_mode = APPEND_MODE_OVERWRITE; break;
+            case  2: g_append_mode = APPEND_MODE_INSERT;    break;
+            default: {
+                fprintf(stderr, "\nError: unsupported append direction %d\n", (i32)direction);
+                myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+
+
+int CMD_Reimport_func(int cmd) {
+    if(CMD.var[0] >= 0) {
+        switch(VAR32(0)) {
+            case 0: g_reimport = 0;     g_reimport_shrink_enlarge = 0;  break;
+            case 1: g_reimport = 1;     g_reimport_shrink_enlarge = 0;  break;
+            case 2: g_reimport = -1;    g_reimport_shrink_enlarge = 0;  break;
+            case 3: g_reimport = -1;    g_reimport_shrink_enlarge = 1;  break;
+            default:
+                fprintf(stderr, "\nError: invalid reimport mode\n");
+                myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
+        }
+    } else {
+        g_reimport = !g_reimport;
+        g_reimport_shrink_enlarge = 0;
+    }
+    quickbms_set_reimport_var();
     return 0;
 }
 
@@ -4398,10 +4783,11 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
             ivecsz,
             hmac    = 0,
             var3_backup;
-    u8      tmp_str[32],
+    u8      *tmp_str = NULL,
             *type,
             *key,
-            *ivec;
+            *ivec,
+            *hash;
 
     // reset ANY ctx
 #ifndef DISABLE_SSL
@@ -4498,6 +4884,9 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
     FREE(rc4_ctx)
     d3des_ctx = 0;
     FREE(chacha_ctx)
+    FREE(spookyhash_ctx)
+    murmurhash_ctx = 0;
+    FREEX(xxhash_ctx, FREE(xxhash_ctx->key))
     if(cmd < 0) return 0;  // bms init
 
     u8  *type_v = VAR(0);
@@ -4532,7 +4921,8 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
     }
 
     if(!stricmp(type, "?")) {
-        fgetz(tmp_str, sizeof(tmp_str), stdin,
+        tmp_str = alloca(32);
+        fgetz(tmp_str, 32, stdin,
             "\n- you must specify the encryption algorithm to use:\n  ");
         type = tmp_str;
     }
@@ -5073,6 +5463,40 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
         if(!chacha_ctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
         chacha20_setup(chacha_ctx, key, keysz, ivec ? ivec : (u8*)"\0\0\0\0\0\0\0\0");
 
+    } else if(!strnicmp(type, "spookyhash", 10)) {
+        spookyhash_ctx = calloc(1, sizeof(*spookyhash_ctx));
+        if(!spookyhash_ctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        if(strstr(type, "32")) {
+            spookyhash_ctx->size = 32;
+            spookyhash_ctx->hash1 = myatoi(key);
+        } else if(strstr(type, "64")) {
+            spookyhash_ctx->size = 64;
+            spookyhash_ctx->hash1 = myatoi(key);
+        } else {
+            spookyhash_ctx->size = 128;
+            memcpy(&spookyhash_ctx->hash1, key, sizeof(u64));
+            if(keysz >= sizeof(u64)) memcpy(&spookyhash_ctx->hash2, key + sizeof(u64), sizeof(u64));
+        }
+
+    } else if(!strnicmp(type, "murmurhash", 10)) {
+        murmurhash_ctx = 128;
+             if(strstr(type, "32")) murmurhash_ctx = 32;
+        else if(strstr(type, "64")) murmurhash_ctx = 64;
+        if(stristr(type, "fnv")) murmurhash_ctx = -murmurhash_ctx;
+
+    } else if(!strnicmp(type, "xxhash", 6) || !strnicmp(type, "XXH", 3)) {
+        xxhash_ctx = calloc(1, sizeof(*xxhash_ctx));
+        if(!xxhash_ctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
+             if(strstr(type, "32")) xxhash_ctx->size = 32;
+        else if(strstr(type, "64")) xxhash_ctx->size = 64;
+        else                        xxhash_ctx->size = 128;
+        if(stristr(type, "bits") || stristr(type, "xxh3")) {
+            xxhash_ctx->size = -xxhash_ctx->size;
+        }
+        if(key && (keysz > 0)) {
+            xxhash_ctx->hash1 = myatoi(key);
+            malloc_copy((void **)&xxhash_ctx->key, key, xxhash_ctx->keysz = keysz);
+        }
 
 /*
     put new algorithms above here
@@ -5081,12 +5505,36 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
 #ifndef DISABLE_SSL
     } else if(!strnicmp(type, "PKCS5_PBKDF2_HMAC", 17)) {
         myhash   = EVP_sha1();
-        openssl_get_algo(type + 17, &mycrypto, &myhash);
+        if(type[17]) openssl_get_algo(type + 17, &mycrypto, &myhash);
         memset(hash_key, 0, sizeof(hash_key));
-        PKCS5_PBKDF2_HMAC(key, keysz, ivec, ivecsz, var3_backup, myhash, sizeof(hash_key), hash_key);
+        PKCS5_PBKDF2_HMAC(key, keysz, ivec, ivecsz, ((var3_backup != 0) && (var3_backup != 1)) ? var3_backup : 1000, myhash, sizeof(hash_key), hash_key);
         mycrypto = NULL;
         myhash   = NULL;
         DO_QUICKBMS_HASH(hash_key, sizeof(hash_key));
+
+    } else if(!strnicmp(type, "Rfc2898DeriveBytes", 18)) {
+        myhash   = EVP_sha1();
+        if(type[18]) openssl_get_algo(type + 18, &mycrypto, &myhash);
+        memset(hash_key, 0, sizeof(hash_key));
+        PKCS5_PBKDF2_HMAC(key, keysz, ivec, ivecsz, ((var3_backup != 0) && (var3_backup != 1)) ? var3_backup : 1000, myhash, sizeof(hash_key), hash_key);
+        mycrypto = NULL;
+        myhash   = NULL;
+        hash = DO_QUICKBMS_HASH(hash_key, sizeof(hash_key));
+
+        keysz  = 32;
+        memcpy(key,  hash, keysz);
+        ivecsz = 32;
+        memcpy(ivec, hash + keysz, ivecsz);
+
+#ifndef DISABLE_MCRYPT
+        mcrypt_ctx = quick_mcrypt_check("mcrypt_rijndael-256_cbc");  // libmcrypt
+        if(mcrypt_generic_init(mcrypt_ctx, key, keysz, ivec) < 0) {
+            fprintf(stderr, "\nError: mcrypt key failed\n");
+            myexit_cmd(cmd, QUICKBMS_ERROR_ENCRYPTION);
+        }
+#else
+        STD_ERR(QUICKBMS_ERROR_ENCRYPTION);
+#endif
 
     } else if(!strnicmp(type, "BytesToKey", 10)) {
         mycrypto = EVP_aes_256_cbc();
@@ -5094,10 +5542,41 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
         openssl_get_algo(type + 10, &mycrypto, &myhash);
         openssl_get_algo(strstr(type + 10, " "), &mycrypto, &myhash);
         memset(hash_key, 0, sizeof(hash_key));
-        EVP_BytesToKey(mycrypto, myhash, ivec, key, keysz, var3_backup, hash_key, hash_key + sizeof(hash_key) / 2);
+        EVP_BytesToKey(mycrypto, myhash, ivec, key, keysz, ((var3_backup != 0) && (var3_backup != 1)) ? var3_backup : 1000, hash_key, hash_key + sizeof(hash_key) / 2);
         mycrypto = NULL;
         myhash   = NULL;
         DO_QUICKBMS_HASH(hash_key, sizeof(hash_key));
+
+#ifndef DISABLE_TOMCRYPT
+#ifdef LTC_PKCS_5
+    } else if(!strnicmp(type, "PBKDF", 5)) {
+        PBKDF_ctx = calloc(1, sizeof(*PBKDF_ctx));
+        if(!PBKDF_ctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        PBKDF_ctx->key      = key;
+        PBKDF_ctx->keysz    = keysz;
+        PBKDF_ctx->ivec     = ivec;
+        PBKDF_ctx->ivecsz   = ivecsz;
+        PBKDF_ctx->iter     = ((var3_backup != 0) && (var3_backup != 1)) ? var3_backup : 1000;
+
+        u8 *p = strchr(type, ' ');
+        if(p) {
+            p = "SHA1";
+        } else {
+            while(*p && !myisalnum(*p)) p++;
+        }
+        tomcrypt_doit(NULL, NULL, NULL, 0, NULL, 0, NULL);
+        PBKDF_ctx->hash  = find_hash(p);
+
+        if(type[5] == '2') {
+            PBKDF_ctx->algo = 2;
+        } else {    //'1'
+            PBKDF_ctx->algo = 1;
+            if(stristr(type, "openssl")) {
+                PBKDF_ctx->openssl = 1;
+            }
+        }
+#endif
+#endif
 
     } else if(!strncmp(type_v, "\x01\x99", 2) || !strnicmp(type, "ZIP_AES", 7)) {
         if(!strncmp(type_v, "\x01\x99", 2)) {
@@ -5272,39 +5751,52 @@ int CMD_GetArray_func(int cmd) {
     array_t *ar;
     int     n,
             idx,
-            array_num;
+            array_num,
+            cmd_n,
+            argc,
+            idx_bck;
 
-    n         = CMD.var[0];
-    array_num = VAR32(1);
-    idx       = VAR32(2);
-
-    if((array_num < 0) || (array_num >= MAX_ARRAYS)) {
-        fprintf(stderr, "\nError: the script uses more arrays (%"PRId") than supported by QuickBMS (%d)\n", array_num, MAX_ARRAYS);
-        myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
+    for(argc = 0; argc < MAX_ARGS; argc++) {
+        if(CMD.var[argc] < 0) break;
     }
-    ar = &g_array[array_num];
+    argc -= 2;
 
-    if(idx < 0) {
-        idx = ar->elements + idx;
-    }
+    array_num = VAR32(argc);
+    idx_bck   = VAR32(argc + 1);
 
-    // lame way for returning the number of elements, maybe use: getarray ELEMENTS 0 -0x80000000
-    if(idx < 0) {
-        add_var(n, NULL, NULL, ar->elements, sizeof(int));
-        return 0;
-    }
+    for(cmd_n = 0; cmd_n < argc; cmd_n++, array_num++) {
+        n = CMD.var[cmd_n];
+        if(n < 0) break;    // useless
 
-    if((idx < 0) || (idx >= ar->elements)) {
-        fprintf(stderr, "\nError: the script uses more array indexes (%"PRId") than available (%"PRId")\n", idx, ar->elements);
-        myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
-    }
+        if((array_num < 0) || (array_num >= MAX_ARRAYS)) {
+            fprintf(stderr, "\nError: the script uses more arrays (%"PRId") than supported by QuickBMS (%d)\n", array_num, MAX_ARRAYS);
+            myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
+        }
+        ar = &g_array[array_num];
 
-    check_variable_errors(idx, &ar->var[idx]);
-    variable_copy(&g_variable[n], &ar->var[idx], 1);
+        idx = idx_bck;
+        if(idx < 0) {
+            idx = ar->elements + idx;
+        }
 
-    if(g_verbose < 0) {
-        if(g_variable[n].isnum) printf(". %08x getarr  %-10s 0x%"PRIx" %d:%d\n", 0, get_varname(n), get_var32(n), (i32)array_num, (i32)idx);
-        else                    printf(". %08x getarr  %-10s \"%s\" %d:%d\n",    0, get_varname(n), get_var(n),   (i32)array_num, (i32)idx);
+        // lame way for returning the number of elements, maybe use: getarray ELEMENTS 0 -0x80000000
+        if(idx < 0) {
+            add_var(n, NULL, NULL, ar->elements, sizeof(int));
+            return 0;
+        }
+
+        if((idx < 0) || (idx >= ar->elements)) {
+            fprintf(stderr, "\nError: the script uses more array indexes (%"PRId") than available (%"PRId")\n", idx, ar->elements);
+            myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
+        }
+
+        check_variable_errors(idx, &ar->var[idx]);
+        variable_copy(&g_variable[n], &ar->var[idx], 1);
+
+        if(g_verbose < 0) {
+            if(g_variable[n].isnum) printf(". %08x getarr  %-10s 0x%"PRIx" %d:%d\n", 0, get_varname(n), get_var32(n), (i32)array_num, (i32)idx);
+            else                    printf(". %08x getarr  %-10s \"%s\" %d:%d\n",    0, get_varname(n), get_var(n),   (i32)array_num, (i32)idx);
+        }
     }
     return 0;
 }
@@ -5318,61 +5810,68 @@ int CMD_PutArray_func(int cmd) {
     int     i,
             n,
             idx,
-            array_num;
+            array_num,
+            cmd_n,
+            idx_bck;
 
     array_num = VAR32(0);
-    idx       = VAR32(1);
-    n         = CMD.var[2];
+    idx_bck   = VAR32(1);
 
-    if((array_num < 0) || (array_num >= MAX_ARRAYS)) {
-        fprintf(stderr, "\nError: the script uses more arrays (%"PRId") than supported by QuickBMS (%d)\n", array_num, MAX_ARRAYS);
-        myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
-    }
-    ar = &g_array[array_num];
+    for(cmd_n = 2; cmd_n < MAX_ARGS; cmd_n++, array_num++) {
+        n = CMD.var[cmd_n];
+        if(n < 0) break;
 
-    if(idx < 0) {
-        idx = ar->elements; // ar->elements + -1 = the last one
-        //fprintf(stderr, "\nError: the script uses negative array indexes (%"PRId")\n", idx);
-        //myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
-    }
+        if((array_num < 0) || (array_num >= MAX_ARRAYS)) {
+            fprintf(stderr, "\nError: the script uses more arrays (%"PRId") than supported by QuickBMS (%d)\n", array_num, MAX_ARRAYS);
+            myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
+        }
+        ar = &g_array[array_num];
 
-    // old: this code will be rewritten in the next version for using linked list
-    // new: after having made the modification, the performances were worst so the current solution will be never changed
+        idx = idx_bck;
+        if(idx < 0) {
+            idx = ar->elements; // ar->elements + -1 = the last one
+            //fprintf(stderr, "\nError: the script uses negative array indexes (%"PRId")\n", idx);
+            //myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
+        }
 
-    if(idx >= ar->elements) {
-        if(idx >= ar->allocated_elements) {
-            t64 = ((u64)idx + (u64)PutArray_func_blocks + (u64)1) * (u64)sizeof(variable_t);   // +1 is necessary
-            if(t64 >= (u64)0x100000000LL) ALLOC_ERR;   // old: temporary solution, will be rewritten
-            ar->var = realloc(ar->var, t64);
-            if(!ar->var) STD_ERR(QUICKBMS_ERROR_MEMORY);
-            ar->allocated_elements = idx + PutArray_func_blocks;
+        // old: this code will be rewritten in the next version for using linked list
+        // new: after having made the modification, the performances were worst so the current solution will be never changed
 
-#ifdef QUICKBMS_VAR_STATIC
-            // lame, after realloc we need to restore the links to the static variables
-            for(i = 0; i < ar->elements; i++) {
-                if(ar->var[i].name  && (ar->var[i].name  != ar->var[i].name_alloc))  ar->var[i].name  = ar->var[i].name_static;
-                if(ar->var[i].value && (ar->var[i].value != ar->var[i].value_alloc)) ar->var[i].value = ar->var[i].value_static;
+        if(idx >= ar->elements) {
+            if(idx >= ar->allocated_elements) {
+                t64 = ((u64)idx + (u64)PutArray_func_blocks + (u64)1) * (u64)sizeof(variable_t);   // +1 is necessary
+                if(t64 >= (u64)0x100000000LL) ALLOC_ERR;   // old: temporary solution, will be rewritten
+                ar->var = realloc(ar->var, t64);
+                if(!ar->var) STD_ERR(QUICKBMS_ERROR_MEMORY);
+                ar->allocated_elements = idx + PutArray_func_blocks;
+
+    #ifdef QUICKBMS_VAR_STATIC
+                // lame, after realloc we need to restore the links to the static variables
+                for(i = 0; i < ar->elements; i++) {
+                    if(ar->var[i].name  && (ar->var[i].name  != ar->var[i].name_alloc))  ar->var[i].name  = ar->var[i].name_static;
+                    if(ar->var[i].value && (ar->var[i].value != ar->var[i].value_alloc)) ar->var[i].value = ar->var[i].value_static;
+                }
+    #endif
             }
-#endif
+
+            for(i = ar->elements; i <= idx; i++) {   // <= remember!!! (example 0 and 0)
+                // no need to use FREE_VAR(&(ar->var[i])); because these arrays are not allocated
+                memset(&(ar->var[i]), 0, sizeof(variable_t));
+    #ifdef QUICKBMS_VAR_STATIC
+                ar->var[i].name  = ar->var[i].name_static;
+                ar->var[i].value = ar->var[i].value_static;
+    #endif
+            }
+
+            ar->elements = idx + 1;
         }
 
-        for(i = ar->elements; i <= idx; i++) {   // <= remember!!! (example 0 and 0)
-            // no need to use FREE_VAR(&(ar->var[i])); because these arrays are not allocated
-            memset(&(ar->var[i]), 0, sizeof(variable_t));
-#ifdef QUICKBMS_VAR_STATIC
-            ar->var[i].name  = ar->var[i].name_static;
-            ar->var[i].value = ar->var[i].value_static;
-#endif
+        variable_copy(&(ar->var[idx]), &g_variable[n], 1);
+
+        if(g_verbose < 0) {
+            if(g_variable[n].isnum) printf(". %08x putarr  %-10s 0x%"PRIx" %d:%d\n", 0, get_varname(n), get_var32(n), (i32)array_num, (i32)idx);
+            else                    printf(". %08x putarr  %-10s \"%s\" %d:%d\n",    0, get_varname(n), get_var(n),   (i32)array_num, (i32)idx);
         }
-
-        ar->elements = idx + 1;
-    }
-
-    variable_copy(&(ar->var[idx]), &g_variable[n], 1);
-
-    if(g_verbose < 0) {
-        if(g_variable[n].isnum) printf(". %08x putarr  %-10s 0x%"PRIx" %d:%d\n", 0, get_varname(n), get_var32(n), (i32)array_num, (i32)idx);
-        else                    printf(". %08x putarr  %-10s \"%s\" %d:%d\n",    0, get_varname(n), get_var(n),   (i32)array_num, (i32)idx);
     }
     return 0;
 }
@@ -5482,6 +5981,60 @@ int CMD_SortArray_func(int cmd) {
 
 
 
+int CMD_SearchArray_func(int cmd) {
+    array_t *ar;
+    int     n,
+            idx,
+            array_num,
+            search_num;
+    u8      *search_str;
+
+    n           = CMD.var[0];
+    array_num   = VAR32(1);
+    search_str  = VARVAR(2).isnum ? NULL : VAR(2);
+    search_num  = VAR32(2);
+
+    if((array_num < 0) || (array_num >= MAX_ARRAYS)) {
+        fprintf(stderr, "\nError: the script uses more arrays (%"PRId") than supported by QuickBMS (%d)\n", array_num, MAX_ARRAYS);
+        myexit_cmd(cmd, QUICKBMS_ERROR_BMS);
+    }
+    ar = &g_array[array_num];
+
+    for(idx = 0; idx < ar->elements; idx++) {
+        // copied from CMD_SortArray_func
+        variable_t  *var_i = &ar->var[idx];
+        u8          *b = var_i->value; if(!b) b = var_i->name;
+
+            if(!var_i->isnum && search_str) {
+                if(stricmp(search_str, b) != 0) continue;
+
+            } else if(var_i->isnum && search_str) {
+                if(stricmp(search_str, myitoa(var_i->value32)) != 0) continue;
+
+            } else if(!var_i->isnum && !search_str) {
+                if(stricmp(myitoa(search_num), b) != 0) continue;
+
+            } else {
+                if((u_int)search_num != (u_int)var_i->value32) continue;    // unsigned
+            }
+
+        break;
+    }
+
+    if((idx < 0) || (idx >= ar->elements)) {
+        idx = (int)-1LL;
+    }
+    add_var(n, NULL, NULL, idx, sizeof(int));
+
+    if(g_verbose < 0) {
+        if(g_variable[n].isnum) printf(". %08x srcharr %-10s 0x%"PRIx" %d:%d\n", 0, get_varname(n), get_var32(n), (i32)array_num, (i32)idx);
+        else                    printf(". %08x srcharr %-10s \"%s\" %d:%d\n",    0, get_varname(n), get_var(n),   (i32)array_num, (i32)idx);
+    }
+    return 0;
+}
+
+
+
 int CMD_Function_func(int startcmd, int nop, int this_is_a_cycle, int *invoked_if, int *invoked_break, int *invoked_continue, u8 **invoked_label) {
     variable_t  *newvar = NULL,
                 *oldvar = NULL;
@@ -5489,7 +6042,6 @@ int CMD_Function_func(int startcmd, int nop, int this_is_a_cycle, int *invoked_i
             cmd,
             i,
             n,
-            t,
             argc,
             keep_vars,
             variables;
@@ -5549,7 +6101,7 @@ int CMD_Function_func(int startcmd, int nop, int this_is_a_cycle, int *invoked_i
         n = CMD.var[2 + i];
         args[i][0] = n;
         if(n < 0) {    // MEMORY_FILE
-            n = -n;
+            n = myabs(n);
             n = add_var(0, tmp, (void *)g_memory_file[n].data + g_memory_file[n].pos, 0, g_memory_file[n].size - g_memory_file[n].pos);
         } else {
             if(var_is_a_string(n)) {
@@ -5579,7 +6131,7 @@ int CMD_Function_func(int startcmd, int nop, int this_is_a_cycle, int *invoked_i
     for(i = 0; i < argc; i++) {
         n = args[i][0];
         if(n < 0) continue;
-        t = args[i][1];
+        int t = args[i][1];
         if(t < 0) continue;
         variable_copy(
             keep_vars ? &g_variable[n] : &oldvar[n],
@@ -5727,7 +6279,7 @@ int CMD_CallDLL_quick_check_memory(void *addr) {
     int     ret = 0;
     if(!addr) return -1;
 #ifdef WIN32
-    DWORD   len;
+    SIZE_T  len;
     u8      buff[1];
     if(!ReadProcessMemory(
         GetCurrentProcess(),
@@ -5851,6 +6403,7 @@ typedef struct {
     u8      is_lua;
     u32     crc;    // crc for memory files, in this case a 32bit crc is enough
     calldllfunc_t   func[MAX_DLL_FUNCS];
+    quickrva_t  *quickrva;
 } calldll_t;
 
 int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_size) {
@@ -5866,7 +6419,7 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
     int     (*funcaddr)()    = NULL;
     int     funcoff     = 0,
             argc,
-            di,
+            di          = -1,
             dj,
             i,
             n,
@@ -5909,7 +6462,7 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
     }
     callconv    = STR(2);
 
-    if(!strnicmp(dllname, MEMORY_FNAME, MEMORY_FNAMESZ)) {
+    if(is_MEMORY_FILE(dllname)) {
         is_mem = 1;
     } else {
         dllname = get_filename(dllname);
@@ -5983,156 +6536,7 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
                     if(TCC_libtcc_init() < 0) myexit(QUICKBMS_ERROR_BMS);
                     TCCState *tccstate = tcc_compiler(gmf->data);
 
-                    #define tcc_symbols_add(X)  tcc_add_symbol(tccstate, #X, X)
-
-                    //stdio.h
-                    tcc_symbols_add(fopen);
-                    tcc_symbols_add(freopen);
-                    tcc_symbols_add(fflush);
-                    tcc_symbols_add(fclose);
-                    //tcc_symbols_add(remove);
-                    //tcc_symbols_add(rename);
-                    //tcc_symbols_add(tmpfile);
-                    //tcc_symbols_add(tempnam);
-                    //tcc_symbols_add(rmtmp);
-                    //tcc_symbols_add(unlink);
-                    tcc_symbols_add(fprintf);
-                    tcc_symbols_add(printf);
-                    tcc_symbols_add(sprintf);
-                    tcc_symbols_add(vfprintf);
-                    tcc_symbols_add(vprintf);
-                    tcc_symbols_add(vsprintf);
-                    tcc_symbols_add(fscanf);
-                    tcc_symbols_add(scanf);
-                    tcc_symbols_add(sscanf);
-                    tcc_symbols_add(fgetc);
-                    tcc_symbols_add(fgets);
-                    tcc_symbols_add(fputc);
-                    tcc_symbols_add(fputs);
-                    tcc_symbols_add(gets);
-                    tcc_symbols_add(puts);
-                    tcc_symbols_add(ungetc);
-                    tcc_symbols_add(getc);
-                    tcc_symbols_add(putc);
-                    tcc_symbols_add(getchar);
-                    tcc_symbols_add(putchar);
-                    tcc_symbols_add(fread);
-                    tcc_symbols_add(fwrite);
-                    tcc_symbols_add(fseek);
-                    tcc_symbols_add(ftell);
-                    tcc_symbols_add(rewind);
-                    tcc_symbols_add(fgetpos);
-                    tcc_symbols_add(fsetpos);
-                    tcc_symbols_add(feof);
-                    tcc_symbols_add(ferror);
-
-                    //stdlib.h
-                    tcc_symbols_add(atoi);
-                    tcc_symbols_add(atof);
-                    tcc_symbols_add(malloc);
-                    tcc_symbols_add(calloc);
-                    tcc_symbols_add(realloc);
-                    tcc_symbols_add(free);
-                    tcc_symbols_add(itoa);
-                    tcc_symbols_add(exit);
-                    tcc_symbols_add(bsearch);
-                    tcc_symbols_add(qsort);
-                    tcc_symbols_add(div);
-                    tcc_symbols_add(abs);
-
-                    //string.h
-                    tcc_symbols_add(memchr);
-                    tcc_symbols_add(memcmp);
-                    tcc_symbols_add(memcpy);
-                    tcc_symbols_add(memmove);
-                    tcc_symbols_add(memset);
-                    tcc_symbols_add(strcat);
-                    tcc_symbols_add(strchr);
-                    tcc_symbols_add(strcmp);
-                    tcc_symbols_add(strcoll);
-                    tcc_symbols_add(strcpy);
-                    tcc_symbols_add(strcspn);
-                    tcc_symbols_add(strerror);
-                    tcc_symbols_add(strlen);
-                    tcc_symbols_add(strncat);
-                    tcc_symbols_add(strncmp);
-                    tcc_symbols_add(strncpy);
-                    tcc_symbols_add(strpbrk);
-                    tcc_symbols_add(strrchr);
-                    tcc_symbols_add(strspn);
-                    tcc_symbols_add(strstr);
-                    tcc_symbols_add(strtok);
-                    tcc_symbols_add(strxfrm);
-                    tcc_symbols_add(memccpy);
-                    tcc_symbols_add(memicmp);
-                    tcc_symbols_add(strdup);
-                    tcc_symbols_add(strcmpi);
-                    tcc_symbols_add(stricmp);
-                    tcc_symbols_add(stricoll);
-                    tcc_symbols_add(strlwr);
-                    tcc_symbols_add(strnicmp);
-                    tcc_symbols_add(strnset);
-                    tcc_symbols_add(strrev);
-                    tcc_symbols_add(strset);
-                    tcc_symbols_add(strupr);
-
-                    //math.h
-                    tcc_symbols_add(sin);
-                    tcc_symbols_add(cos);
-                    tcc_symbols_add(tan);
-                    tcc_symbols_add(sinh);
-                    tcc_symbols_add(cosh);
-                    tcc_symbols_add(tanh);
-                    tcc_symbols_add(asin);
-                    tcc_symbols_add(acos);
-                    tcc_symbols_add(atan);
-                    tcc_symbols_add(atan2);
-                    tcc_symbols_add(exp);
-                    tcc_symbols_add(log);
-                    tcc_symbols_add(log10);
-                    tcc_symbols_add(pow);
-                    tcc_symbols_add(sqrt);
-                    tcc_symbols_add(ceil);
-                    tcc_symbols_add(floor);
-                    tcc_symbols_add(fabs);
-                    tcc_symbols_add(ldexp);
-                    tcc_symbols_add(frexp);
-                    tcc_symbols_add(modf);
-                    tcc_symbols_add(fmod);
-
-                    //ctype.h
-                    tcc_symbols_add(isalnum);
-                    tcc_symbols_add(isalpha);
-                    tcc_symbols_add(iscntrl);
-                    tcc_symbols_add(isdigit);
-                    tcc_symbols_add(isgraph);
-                    tcc_symbols_add(islower);
-                    tcc_symbols_add(isleadbyte);
-                    tcc_symbols_add(isprint);
-                    tcc_symbols_add(ispunct);
-                    tcc_symbols_add(isspace);
-                    tcc_symbols_add(isupper);
-                    tcc_symbols_add(isxdigit);
-                    tcc_symbols_add(tolower);
-                    tcc_symbols_add(toupper);
-
-                    //time.h
-                    tcc_symbols_add(time);
-                    tcc_symbols_add(difftime);
-                    tcc_symbols_add(mktime);
-                    tcc_symbols_add(asctime);
-                    tcc_symbols_add(ctime);
-                    tcc_symbols_add(gmtime);
-                    tcc_symbols_add(localtime);
-
-                    //windows.h/winbase.h
-                    tcc_symbols_add(LoadLibraryA);
-                    tcc_symbols_add(LoadLibraryExA);
-                    tcc_symbols_add(GetProcAddress);
-                    tcc_symbols_add(FreeLibrary);
-                    tcc_symbols_add(FindResourceA);
-                    tcc_symbols_add(GetModuleHandleA);
-                    tcc_symbols_add(GetModuleHandleExA);
+                    TCC_libtcc_symbols(tccstate);
 
                     if(tcc_relocate(tccstate, TCC_RELOCATE_AUTO) < 0) myexit(QUICKBMS_ERROR_BMS);
                     hlib   = (void *)tccstate;
@@ -6232,6 +6636,7 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
         dll[di].is_lua = is_lua;
         if(is_mem) dll[di].crc = crc;
         else       dll[di].crc = 0;
+        dll[di].quickrva = NULL;
     }
 
     // must be done at every call, Lua requires it before getglobal funcname
@@ -6239,7 +6644,7 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
         // set global variables for interacting with the script... useful?
         for(i = 0; i < MAX_VARS; i++) {
             if(!g_variable[i].name) break;
-            p = get_var_ptr_cmd(i, -1, -1, 1, &n);
+            p = get_var_ptr_cmd(i, -1, -1, 1, &n, NULL);
             if(is_pyt) {
                      if(n >= 0)  pValue = PyBuffer_FromReadWriteMemory(p, n);
                 else if(n == -2) pValue = PyFloat_FromDouble(g_variable[i].float64);
@@ -6374,7 +6779,7 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
     // COPY THIS TO run_exe IF YOU MODIFY IT!
     for(i = 0; i < argc; i++) { // wow, looks chaotic?
         args_idx[i] = CMD.var[4 + i];   // currently used only for float numbers
-        args[i] = get_var_ptr_cmd(-1, cmd, 4 + i, 1, &args_size[i]);
+        args[i] = get_var_ptr_cmd(-1, cmd, 4 + i, 1, &args_size[i], NULL);
         if(args_size[i] == -2) {    // only float allowed, this is a work-around
             args[i] = NULL;
             float args_float = (float)g_variable[args_idx[i]].float64;
@@ -6409,83 +6814,71 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
         switch(argc) { \
             case 0: { \
                 __##X int (*function0_##X)(void) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function0_##X(); \
+                CALLDLL_DO_INT3 ret = function0_##X(); \
                 break; } \
             case 1: { \
                 __##X int (*function1_##X)(void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function1_##X(args[0]); \
+                CALLDLL_DO_INT3 ret = function1_##X(args[0]); \
                 break; } \
             case 2: { \
                 __##X int (*function2_##X)(void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function2_##X(args[0], args[1]); \
+                CALLDLL_DO_INT3 ret = function2_##X(args[0], args[1]); \
                 break; } \
             case 3: { \
                 __##X int (*function3_##X)(void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function3_##X(args[0], args[1], args[2]); \
+                CALLDLL_DO_INT3 ret = function3_##X(args[0], args[1], args[2]); \
                 break; } \
             case 4: { \
                 __##X int (*function4_##X)(void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function4_##X(args[0], args[1], args[2], args[3]); \
+                CALLDLL_DO_INT3 ret = function4_##X(args[0], args[1], args[2], args[3]); \
                 break; } \
             case 5: { \
                 __##X int (*function5_##X)(void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function5_##X(args[0], args[1], args[2], args[3], args[4]); \
+                CALLDLL_DO_INT3 ret = function5_##X(args[0], args[1], args[2], args[3], args[4]); \
                 break; } \
             case 6: { \
                 __##X int (*function6_##X)(void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function6_##X(args[0], args[1], args[2], args[3], args[4], args[5]); \
+                CALLDLL_DO_INT3 ret = function6_##X(args[0], args[1], args[2], args[3], args[4], args[5]); \
                 break; } \
             case 7: { \
                 __##X int (*function7_##X)(void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function7_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6]); \
+                CALLDLL_DO_INT3 ret = function7_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6]); \
                 break; } \
             case 8: { \
                 __##X int (*function8_##X)(void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function8_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]); \
+                CALLDLL_DO_INT3 ret = function8_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]); \
                 break; } \
             case 9: { \
                 __##X int (*function9_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function9_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]); \
+                CALLDLL_DO_INT3 ret = function9_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]); \
                 break; } \
             case 10: { \
                 __##X int (*function10_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function10_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]); \
+                CALLDLL_DO_INT3 ret = function10_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]); \
                 break; } \
             case 11: { \
                 __##X int (*function11_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function11_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]); \
+                CALLDLL_DO_INT3 ret = function11_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]); \
                 break; } \
             case 12: { \
                 __##X int (*function12_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function12_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]); \
+                CALLDLL_DO_INT3 ret = function12_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]); \
                 break; } \
             case 13: { \
-                __##X int (*function12_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function12_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]); \
+                __##X int (*function13_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
+                CALLDLL_DO_INT3 ret = function13_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]); \
                 break; } \
             case 14: { \
-                __##X int (*function12_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function12_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]); \
+                __##X int (*function14_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
+                CALLDLL_DO_INT3 ret = function14_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]); \
                 break; } \
             case 15: { \
-                __##X int (*function12_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
-                CALLDLL_DO_INT3 \
-                ret = function12_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]); \
+                __##X int (*function15_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
+                CALLDLL_DO_INT3 ret = function15_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]); \
+                break; } \
+            case 16: { \
+                __##X int (*function16_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
+                CALLDLL_DO_INT3 ret = function16_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]); \
                 break; } \
             default: { \
                 fprintf(stderr, "\nError: this tool doesn't support all these arguments for the dll functions ("#X")\n"); \
@@ -6510,6 +6903,7 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
             case 13: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]); break; \
             case 14: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]); break; \
             case 15: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]); break; \
+            case 16: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]); break; \
             default: { \
                 fprintf(stderr, "\nError: this tool doesn't support all these arguments for the dll functions ("#X")\n"); \
                 myexit_cmd(cmd, QUICKBMS_ERROR_DLL); \
@@ -6639,6 +7033,37 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
         else if(lua_isuserdata      ((lua_State *)hlib, -1))    ret = (int)lua_touserdata   ((lua_State *)hlib, -1);
         // if we call lua_pop the GC is going to destroy the return value... yeah, this is wrong
         if(lua_ret < 0) lua_pop((lua_State *)hlib, 1);
+
+    // keep this "if" at the end
+    } else if(stristr(callconv, "va") || stristr(callconv, "virtual") || stristr(callconv, "entrypoint")) {
+        if(di < 0) myexit_cmd(cmd, QUICKBMS_ERROR_DLL); // should never happen
+        if(!dll[di].quickrva) {
+            dll[di].quickrva = malloc(sizeof(quickrva_t));
+            if(quickrva(dll[di].quickrva, (void *)hlib, -1) < 0) {
+                fprintf(stderr, "\nError: calldll quickrva failed\n");
+                myexit_cmd(cmd, QUICKBMS_ERROR_DLL);
+            }
+        }
+        if(stristr(callconv, "entrypoint")) {
+            ret = (int)dll[di].quickrva->entrypoint;
+
+        } else if(stristr(callconv, "rva2") || stristr(callconv, "rvato")) {
+            ret = rva2file(dll[di].quickrva, funcoff);
+            if(ret == (int)-1LL) {
+                ret = rva2file(dll[di].quickrva, (int)hlib + funcoff);
+            }
+
+        } else if(stristr(callconv, "va2") || stristr(callconv, "vato")) {
+            ret = rva2file(dll[di].quickrva, (int)hlib + funcoff);
+
+        } else if(stristr(callconv, "rva") || stristr(callconv, "relative")) {
+            ret = file2rva(dll[di].quickrva, funcoff);
+
+        } else {    // file2va / virtualaddress
+            ret = (int)hlib + file2rva(dll[di].quickrva, funcoff);
+        }
+        //if(ret == (int)-1) ???
+
     } else {
         fprintf(stderr, "\nError: calling convention %s not supported\n", callconv);
         myexit_cmd(cmd, QUICKBMS_ERROR_DLL);
@@ -6716,7 +7141,7 @@ int CMD_ScanDir_func(int cmd) {
         curr_file++;
     } else {
         add_var(CMD.var[1], NULL, "", 0, -1);
-        add_var(CMD.var[2], NULL, NULL, -1, sizeof(int));
+        add_var(CMD.var[2], NULL, NULL, (int)-1LL, sizeof(int));
         if(files) {
             for(i = 0; i < total_files; i++) {
                 FREE(files[i].name)
@@ -6766,6 +7191,7 @@ int CMD_PutDString_func(int cmd) {
     //if(data) datasz = strlen(data);
     //if(datasz > size) datasz = size;
     datasz = VARSZ(0);
+    if(size < 0) size = VARSZ(0);   // VARSZF or VARSZ?
     if(size < datasz) datasz = size;
 
     // alternative method (simpler but uses full allocated buff)
@@ -6845,11 +7271,6 @@ int CMD_FEof_func(int cmd) {
 
 
 
-
-void bms_init(int reinit);
-
-
-
 __declspec(dllexport)
 i32 __stdcall quickbms_compression2(char *algo, void *dictionary, i32 dictionary_len, void *in, i32 zsize, void *out, i32 size) {
     quickbms_dll_init();
@@ -6859,7 +7280,7 @@ i32 __stdcall quickbms_compression2(char *algo, void *dictionary, i32 dictionary
     int cmd = 0;
     CMD.type   = CMD_ComType;
     mystrdup(&CMD.str[0], algo);
-    CMD.num[1] = malloc_copy2((void **)&(CMD.str[1]), dictionary, dictionary_len);
+    malloc_copy((void **)&(CMD.str[1]), dictionary, CMD.num[1] = dictionary_len);
     if(CMD_ComType_func(0, NULL, NULL, 0) < 0) return -1;
     cmd++;
     CMD.type    = CMD_NONE;
@@ -6898,8 +7319,8 @@ i32 __stdcall quickbms_encryption(char *algo, void *key, i32 keysz, void *ivec, 
     int cmd = 0;
     CMD.type   = CMD_Encryption;
     CMD.var[0] = add_var(0, algo, NULL, 0, -2);                         // type
-    CMD.num[1] = malloc_copy2((void **)&(CMD.str[1]), key, keysz);      // key
-    CMD.num[2] = malloc_copy2((void **)&(CMD.str[2]), ivec, ivecsz);    // ivec
+    malloc_copy((void **)&(CMD.str[1]), key,  CMD.num[1] = keysz);      // key
+    malloc_copy((void **)&(CMD.str[2]), ivec, CMD.num[2] = ivecsz);     // ivec
     CMD.var[3] = add_var(0, myitoa(mode), NULL, 0, -2);                 // decrypt/encrypt
     if(keysz > 0) CMD.var[4] = add_var(0, myitoa(keysz), NULL, 0, -2);  // keylen
     cmd++;

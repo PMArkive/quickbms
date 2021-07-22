@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2018 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -85,6 +85,7 @@ enum {
     CMD_GetArray,
     CMD_PutArray,
     CMD_SortArray,
+    CMD_SearchArray,
     CMD_StartFunction,
     CMD_CallFunction,
     CMD_EndFunction,
@@ -104,6 +105,7 @@ enum {
     CMD_SLog,
     CMD_Continue,
     CMD_Label,
+    CMD_Reimport,
     CMD_If_Return,      // internal usage
     CMD_DirectoryExists,
     CMD_FEof,
@@ -167,6 +169,7 @@ enum {  // the value is referred to their size which makes the job faster, numbe
     BMS_TYPE_VARIABLE6          = -1037,
     BMS_TYPE_VARIABLE7          = -1038,
     BMS_TYPE_UNICODE32          = -1039,
+    BMS_TYPE_EXE_FOLDER         = -1040,
         //
     BMS_TYPE_ASM16              = -2000,
     BMS_TYPE_ASM64              = -2001,
@@ -182,6 +185,9 @@ enum {  // the value is referred to their size which makes the job faster, numbe
     BMS_TYPE_ASM_XCORE          = -2011,
     BMS_TYPE_ASM                = -2012,
         //
+    BMS_TYPE_REGEX              = -3000,
+    BMS_TYPE_PROMPT             = -3001,
+        //
     BMS_TYPE_UNKNOWN            = -10000,
         // nop
     BMS_TYPE_NOP
@@ -190,10 +196,11 @@ enum {  // the value is referred to their size which makes the job faster, numbe
 
 
 enum {
-    APPEND_MODE_NONE = 0,
-    APPEND_MODE_APPEND = 1,
-    APPEND_MODE_OVERWRITE = 2,
-    APPEND_MODE_BEFORE = -1
+    APPEND_MODE_NONE            = 0,
+    APPEND_MODE_APPEND          = 1,
+    APPEND_MODE_OVERWRITE       = 2,
+    APPEND_MODE_INSERT          = 3,    // sort of logical AND of APPEND and OVERWRITE
+    APPEND_MODE_BEFORE          = -1
 };
 
 
@@ -338,7 +345,8 @@ typedef struct {
     u8      *str[MAX_ARGS]; // fixed string
     u8      type;           // type of command to execute
     u8      *debug_line;    // used with -v
-    int     bms_line_number;
+    i32     bms_line_number;
+    u32     mask;           // used only in idstring and findloc but may be useful in the future
 } command_t;
 
 
@@ -392,7 +400,7 @@ typedef struct {
     void    *ad;            // audio operations
     void    *vd;            // video operations
     void    *md;            // Windows messages operations
-    u8      *prev_basename;
+    u8      temporary_file;
     i32     invalid_reimport2;
     u_int   tail_toc_offset;
     u_int   tail_toc_size;
@@ -592,6 +600,47 @@ replace_ctx_t   *replace_ctx        = NULL;
 arc4_context    *rc4_ctx            = NULL;
 int             d3des_ctx           = 0;
 chacha20_ctx    *chacha_ctx         = NULL;
+typedef struct {
+    int     size;
+    u64     hash1;
+    u64     hash2;
+    u8      *key;
+    int     keysz;
+} myhash_context;
+myhash_context  *spookyhash_ctx     = NULL;
+int             murmurhash_ctx      = 0;
+myhash_context  *xxhash_ctx         = NULL;
+typedef struct {
+    int     algo;
+    int     openssl;
+    u8      *key;
+    int     keysz;
+    u8      *ivec;
+    int     ivecsz;
+    int     iter;
+    int     hash;
+} PBKDF_ctx_t;
+PBKDF_ctx_t     *PBKDF_ctx          = NULL;
+
+
+
+enum {
+    DEBUG_OUTPUT_JSON,
+    DEBUG_OUTPUT_CSV,
+    DEBUG_OUTPUT_YAML,
+    DEBUG_OUTPUT_XML,
+    DEBUG_OUTPUT_C,
+    //
+    DEBUG_OUTPUT_ERROR,
+};
+typedef struct {
+    int     format;
+    u8      *ext;
+    u8      *filename;
+    int     level;
+    FILE    *fd;
+} g_debug_output_t;
+g_debug_output_t    *g_debug_output = NULL;
 
 
 
@@ -653,7 +702,9 @@ int     g_last_cmd                  = 0,
         g_force_output_pos          = 0,    // used in reimport mode, don't reset it
         g_reimport_shrink_enlarge   = 0,
         g_force_utf16               = 0,    // currently used only in slog
-        g_log_filler_char           = -1;
+        g_log_filler_char           = -1,
+        g_slog_id                   = 0,
+        g_c_structs_allowed         = 0;
         //g_min_int                   = 1 << ((sizeof(int) << 3) - 1),
         //g_max_int                   = (u_int)(1 << ((sizeof(int) << 3) - 1)) - 1;
 u8      g_current_folder[PATHSZ + 1]= "",  // just the current folder when the program is launched
@@ -678,12 +729,15 @@ int     EXTRCNT_idx                 = -1,
 typedef struct {
     int     cmd;
     u8      *key;
-    int     *pos;
-    int     size;
+    u_int   *pos;   // it was int but failed in post_fseek_actions with negative value
+    u_int   size;
+    int     fd;     // MAX_FILES+1 for all the files (default)
 } filexor_t;
-filexor_t   g_filexor       = {0, NULL, NULL, 0};
-filexor_t   g_filerot       = {0, NULL, NULL, 0};
-filexor_t   g_filecrypt     = {0, NULL, NULL, 0};
+#define RESET_FILEXOR   {0, NULL, NULL, 0, MAX_FILES + 1}
+filexor_t   g_filexor_reset = RESET_FILEXOR;    // no easy way to reset a struct after declaration
+filexor_t   g_filexor       = RESET_FILEXOR;
+filexor_t   g_filerot       = RESET_FILEXOR;
+filexor_t   g_filecrypt     = RESET_FILEXOR;
 
 
 

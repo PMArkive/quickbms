@@ -174,6 +174,7 @@ To compile (g++ 3.4.5, upx 3.00w):
 #include <time.h>
 #include <math.h>
 #include <ctype.h>
+#include <stdint.h>
 #define NDEBUG  // remove for debugging
 #include <assert.h>
 
@@ -840,7 +841,7 @@ HashTable<B>::HashTable(int n): NB(n-B) {
   assert(B>=2 && (B&B-1)==0);
   assert(n>=B*4 && (n&n-1)==0);
   alloc(t, n+512+B*2);
-  t=(U8*)(((long)t+511)&0xfffffe00)+1;	// align on cache line boundary
+  t=(U8*)(((intptr_t)t+511)&(-200))+1;	// align on cache line boundary
 }
 
 #define RORi(x,y) x<<(32-y)|x>>y

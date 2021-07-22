@@ -57,9 +57,9 @@
                                  // 4 + 0x00FFFFFF + 0x00200000 + padding
 
 /*----------------------------------------------------------------------------*/
-unsigned char ring[LZS_N + LZS_F - 1];
-int           dad[LZS_N + 1], lson[LZS_N + 1], rson[LZS_N + 1 + 256];
-int           pos_ring, len_ring, lzs_vram;
+static unsigned char ring[LZS_N + LZS_F - 1];
+static int           dad[LZS_N + 1], lson[LZS_N + 1], rson[LZS_N + 1 + 256];
+static int           pos_ring, len_ring, lzs_vram;
 
 /*----------------------------------------------------------------------------*/
 #define BREAK(text) { printf(text); return; }

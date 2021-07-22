@@ -9,7 +9,29 @@
 #include <stdlib.h>
 #include <string.h>
 
-int crush_decompress(unsigned char *in, int insz, unsigned char *out, int outsz) {
+static int bit_buf;
+static int bit_count;
+static unsigned char *in;
+
+static void crush_init_bits()
+{
+	bit_count=bit_buf=0;
+}
+
+static int crush_get_bits(int n)
+{
+	while (bit_count<n)
+	{
+		bit_buf|=(*in++)<<bit_count;
+		bit_count+=8;
+	}
+	const int x=bit_buf&((1<<n)-1);
+	bit_buf>>=n;
+	bit_count-=n;
+	return x;
+}
+
+int crush_decompress(unsigned char *_in, int insz, unsigned char *out, int outsz) {
 
 int W_BITS=21; // Window size (17..23)
 //int W_SIZE=1<<W_BITS;
@@ -30,28 +52,8 @@ int D=(1<<D_BITS)+C;
 int E=(1<<E_BITS)+D;
 //int F=(1<<F_BITS)+E;
 
-int bit_buf;
-int bit_count;
-
-inline void crush_init_bits()
-{
-	bit_count=bit_buf=0;
-}
-
-inline int crush_get_bits(int n)
-{
-	while (bit_count<n)
-	{
-		bit_buf|=(*in++)<<bit_count;
-		bit_count+=8;
-	}
-	const int x=bit_buf&((1<<n)-1);
-	bit_buf>>=n;
-	bit_count-=n;
-	return x;
-}
-
-		crush_init_bits();
+    in = _in;
+	crush_init_bits();
 
     int size = outsz;
         

@@ -16,7 +16,7 @@ const int HSEL_VERSION				= 3;
 #define GetNextKey(A,B,C)	(	( (A)*(B) )	+	(C)	)
 #define HSELSWAP(A,B)		(	(A)^=(B)^=(A)^=(B)	)
 
-#define SharpRandom()		srand( (unsigned __int32)/*timeGetTime*/GetTickCount() )
+#define SharpRandom()		srand( (unsigned int)/*timeGetTime*/GetTickCount() )
 
 /*--------------------------------------------------------------------------------*/
 ////////////////		HSEL_STREAM Class Fuction Body				////////////////

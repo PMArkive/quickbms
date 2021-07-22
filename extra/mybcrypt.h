@@ -616,6 +616,7 @@ typedef PVOID BCRYPT_HANDLE;
 
 
 
+#define QUICKBMS_BCrypt_init
 HMODULE BCrypt_init(void) {
     static HMODULE hLib = NULL;
     if(!hLib) {

@@ -11,6 +11,7 @@
     #include <time.h>
     #define GetTickCount()  time(NULL)  // who cares...
     typedef int32_t __int32;
+    typedef uint32_t __uint32;
 #endif
 #define ASSERTMSG(X,Y)
 

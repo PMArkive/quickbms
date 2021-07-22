@@ -56,6 +56,13 @@
 #define ECRYPT_UNKNOWN
 #endif
 
+// added by Luigi
+#ifdef ECRYPT_UNKNOWN
+#undef ECRYPT_UNKNOWN
+#define ECRYPT_BIG_ENDIAN
+#endif
+
+
 /* ------------------------------------------------------------------------- */
 
 /*

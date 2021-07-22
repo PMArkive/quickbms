@@ -12,7 +12,7 @@ backward compatibility (so new features have been added in pre-existent
 options).
 
 
-    Copyright 2006-2018 Luigi Auriemma
+    Copyright 2006-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -37,7 +37,7 @@ options).
 
 
 
-#define MYDOWN_VER                          "0.4"
+#define MYDOWN_VER                          "0.4a"
 #define MYDOWN_ERROR                        (-1LL)
 #define MYDOWN_OPTION_ONLY_IF_DIFFERENT     1
 #define MYDOWN_OPTION_DOSSL                 30

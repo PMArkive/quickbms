@@ -55,7 +55,7 @@ typedef unsigned short	MP_WC;
 typedef short	MP_S16;
 typedef char	MP_S8;
 #if defined(_WIN64)
-typedef unsigned __int64	MP_PTR, *PMP_PTR;
+typedef unsigned long long /*__int64*/	MP_PTR, *PMP_PTR;
 #else
 typedef unsigned long	MP_PTR, *PMP_PTR;
 #endif

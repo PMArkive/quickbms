@@ -2,9 +2,29 @@
 by Luigi Auriemma
 */
 
+#include <stdio.h>
+#include <stdlib.h>
 
+// int is 64bit in Oodle64
+int   __stdcall (*OodleLZ_Compress)(int algo, void *in, int insz, void *out, int max, void *a, void *b, void *c, void *d, int e) = NULL;
+int   __stdcall (*OodleLZ_Decompress)(void *in, int insz, void *out, int outsz, int a, int b, int c, void *d, void *e, void *f, void *g, void *h, void *i, int j) = NULL;   // Oodle 2.3.0
 
-#ifdef WIN32
+int OodleLZ_Compress_argc   = -1;
+int OodleLZ_Decompress_argc = -1;
+
+void  __stdcall (*Oodle_GetConfigValues)(void *info) = NULL;
+void  __stdcall (*Oodle_SetConfigValues)(void *info) = NULL;
+char* __stdcall (*OodleLZ_Compressor_GetName)(int a) = NULL;
+
+int   __stdcall (*OodleNetwork1UDP_Decode)(void *state, void *shared, void *in, int insz, void *out, int outsz) = NULL;
+int   __stdcall (*OodleNetwork1UDP_Encode)(void *state, void *shared, void *in, int insz, void *out) = NULL;
+int   __stdcall (*OodleNetwork1UDP_State_Size)() = NULL;
+void  __stdcall (*OodleNetwork1UDP_State_Uncompact)(void *out, void *in) = NULL;
+void  __stdcall (*OodleNetwork1_Shared_SetWindow)(void *out, int out_bits, void *in, int insz) = NULL;
+int   __stdcall (*OodleNetwork1_Shared_Size)(int a) = NULL;
+
+//void* __stdcall (*OodlePlugins_SetAssertion)(void *func) = NULL;
+//int __stdcall oodle_noassert(const char * a,const int b,const char * c,const char * d) { return 0; }
 
 
 
@@ -32,55 +52,49 @@ Oodle_algorithms_raw_t    Oodle_algorithms_raw[Oodle_algorithms_raw_max] = { // 
     { "Selkie",        11, 10 },
     { "Hydra",         12,  6 },
     { "Leviathan",     13, 12 },
-    { NULL, -1, -1 }
+    { NULL,            -1, -1 }
 };
 
 
 
-#include <stdio.h>
-#include <stdlib.h>
-#include "oo2core_dll.h"
-#include "oo2net_dll.h"
+int myOodle_Init2(void) {
+    int     info[32] = {0};
+    if(Oodle_GetConfigValues && Oodle_SetConfigValues) {
+        Oodle_GetConfigValues(&info);
+        info[5] = 5;    // maintain compatibility with oodle 2.5.x used in many games
+        Oodle_SetConfigValues(&info);
+    }
 
-// int is 64bit in Oodle64
-int   __stdcall (*OodleLZ_Compress)(int algo, void *in, int insz, void *out, int max, void *a, void *b, void *c, void *d, int e) = NULL;
-int   __stdcall (*OodleLZ_Decompress)(void *in, int insz, void *out, int outsz, int a, int b, int c, void *d, void *e, void *f, void *g, void *h, void *i, int j) = NULL;   // Oodle 2.3.0
-
-int OodleLZ_Compress_argc   = -1;
-int OodleLZ_Decompress_argc = -1;
-
-void  __stdcall (*Oodle_GetConfigValues)(void *info) = NULL;
-void  __stdcall (*Oodle_SetConfigValues)(void *info) = NULL;
-char* __stdcall (*OodleLZ_Compressor_GetName)(int a) = NULL;
-
-int   __stdcall (*OodleNetwork1UDP_Decode)(void *state, void *shared, void *in, int insz, void *out, int outsz) = NULL;
-int   __stdcall (*OodleNetwork1UDP_Encode)(void *state, void *shared, void *in, int insz, void *out) = NULL;
-int   __stdcall (*OodleNetwork1UDP_State_Size)() = NULL;
-void  __stdcall (*OodleNetwork1UDP_State_Uncompact)(void *out, void *in) = NULL;
-void  __stdcall (*OodleNetwork1_Shared_SetWindow)(void *out, int out_bits, void *in, int insz) = NULL;
-int   __stdcall (*OodleNetwork1_Shared_Size)(int a) = NULL;
-
-//void* __stdcall (*OodlePlugins_SetAssertion)(void *func) = NULL;
-//int __stdcall oodle_noassert(const char * a,const int b,const char * c,const char * d) { return 0; }
-
-
-
-int oodle_get_algo(char *name, int raw) {
-    int     i;
-    if(name) {
-        if(!stricmp(name, "LZQ1")) name = "Kraken";
-        if(!stricmp(name, "LZNIB2")) name = "Mermaid";
-        if(!stricmp(name, "Akkorokamui")) name = "Hydra";
-
-        for(i = 0; Oodle_algorithms_raw[i].name; i++) {
-            if(!stricmp(name, Oodle_algorithms_raw[i].name)) {
-                if(raw) return Oodle_algorithms_raw[i].algo_raw;
-                else    return Oodle_algorithms_raw[i].algo_compress;
+    if(OodleLZ_Compressor_GetName) {
+        int     i, x;
+        char    *name;
+        for(i = 0; i < Oodle_algorithms_raw_max; i++) {
+            name = OodleLZ_Compressor_GetName(i);
+            if(!name) break;    // not used
+            if(!stricmp(name, "invalid")) break;
+            for(x = 0; Oodle_algorithms_raw[x].name; x++) {
+                if(!stricmp(Oodle_algorithms_raw[x].name, name)) break;
+            }
+            Oodle_algorithms_raw[x].algo_compress = i;
+            if(!Oodle_algorithms_raw[x].name) {
+                Oodle_algorithms_raw[x].name = name;
+                Oodle_algorithms_raw[x].algo_raw = x;   // ???
+                x++;
+                Oodle_algorithms_raw[x].name = NULL;
+                Oodle_algorithms_raw[x].algo_compress = -1;
+                Oodle_algorithms_raw[x].algo_raw = -1;
             }
         }
     }
-    return -1;
+    return 0;
 }
+
+
+
+#ifdef WIN32
+
+#include "oo2core_dll.h"
+#include "oo2net_dll.h"
 
 
 
@@ -93,10 +107,10 @@ void *myOodle_GetProcAddress_scanner(HMODULE hlib, char *func_name, int argc_min
     if(func_name) {
         if(argc_min < 0) argc_min = 0;
         for(argc = argc_min;; argc++) {
-            sprintf(buff, "_%s@%d", func_name, argc * sizeof(void *));
+            sprintf(buff, "_%s@%d", func_name, (int)(argc * sizeof(void *)));
             ret = (void *)MemoryGetProcAddress(hlib, buff);
             if(ret) break;
-            sprintf(buff,  "%s@%d", func_name, argc * sizeof(void *));  // without "_", impossible but let's try anyway
+            sprintf(buff,  "%s@%d", func_name, (int)(argc * sizeof(void *)));   // without "_", impossible but let's try anyway
             ret = (void *)MemoryGetProcAddress(hlib, buff);
             if(ret) break;
         }
@@ -161,36 +175,61 @@ int myOodle_Init(void) {
         //if(!OodlePlugins_SetAssertion) OodlePlugins_SetAssertion = (void *)MemoryGetProcAddress(hlib, "_OodlePlugins_SetAssertion@4");
         //if(OodlePlugins_SetAssertion) OodlePlugins_SetAssertion(oodle_noassert);
 
-        int     info[32] = {0};
-        if(Oodle_GetConfigValues && Oodle_SetConfigValues) {
-            Oodle_GetConfigValues(&info);
-            info[5] = 5;    // maintain compatibility with oodle 2.5.x used in many games
-            Oodle_SetConfigValues(&info);
+        myOodle_Init2();
+    }
+    return 0;
+}
+
+
+
+#else
+
+    #if defined(i386) || defined(IA64)
+
+        // requires -msse2 to build
+
+        extern int Kraken_Decompress(const byte *src, size_t src_len, byte *dst, size_t dst_len);
+        int   __stdcall _OodleLZ_Decompress(void *in, int insz, void *out, int outsz, int a, int b, int c, void *d, void *e, void *f, void *g, void *h, void *i, int j) {
+            return Kraken_Decompress(in, insz, out, outsz);
         }
 
-        if(OodleLZ_Compressor_GetName) {
-            int     i, x;
-            char    *name;
-            for(i = 0; i < Oodle_algorithms_raw_max; i++) {
-                name = OodleLZ_Compressor_GetName(i);
-                if(!name) break;    // not used
-                if(!stricmp(name, "invalid")) break;
-                for(x = 0; Oodle_algorithms_raw[x].name; x++) {
-                    if(!stricmp(Oodle_algorithms_raw[x].name, name)) break;
-                }
-                Oodle_algorithms_raw[x].algo_compress = i;
-                if(!Oodle_algorithms_raw[x].name) {
-                    Oodle_algorithms_raw[x].name = name;
-                    Oodle_algorithms_raw[x].algo_raw = x;   // ???
-                    x++;
-                    Oodle_algorithms_raw[x].name = NULL;
-                    Oodle_algorithms_raw[x].algo_compress = -1;
-                    Oodle_algorithms_raw[x].algo_raw = -1;
-                }
+        int myOodle_Init(void) {
+            static int  init = 0;
+            if(!init) {
+                init = 1;
+                OodleLZ_Decompress = _OodleLZ_Decompress;
+                myOodle_Init2();
+            }
+            return 0;
+        }
+
+    #else
+
+        int myOodle_Init(void) {
+            return -1;
+        }
+
+    #endif
+
+#endif
+
+
+
+int oodle_get_algo(char *name, int raw) {
+    int     i;
+    if(name) {
+        if(!stricmp(name, "LZQ1")) name = "Kraken";
+        if(!stricmp(name, "LZNIB2")) name = "Mermaid";
+        if(!stricmp(name, "Akkorokamui")) name = "Hydra";
+
+        for(i = 0; Oodle_algorithms_raw[i].name; i++) {
+            if(!stricmp(name, Oodle_algorithms_raw[i].name)) {
+                if(raw) return Oodle_algorithms_raw[i].algo_raw;
+                else    return Oodle_algorithms_raw[i].algo_compress;
             }
         }
     }
-    return 0;
+    return -1;
 }
 
 
@@ -210,7 +249,11 @@ int myOodleLZ_Compress(unsigned char *in, int insz, unsigned char *out) {
     } else {
         ret = stdcall_call(OodleLZ_Compress, OodleLZ_Compress_argc,
             algo, in, insz, out, 8,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0); // put lot of fake arguments, who knows the future...
+            0,0,0,0,0
+            #ifdef CALLCONV_INIT
+                     ,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  // put lot of fake arguments, who knows the future...
+            #endif
+            );
     }
     return ret;
 }
@@ -236,7 +279,11 @@ int myOodleLZ_Decompress(unsigned char *in, int insz, unsigned char *out, int ou
     } else {
         outsz = stdcall_call(OodleLZ_Decompress, OodleLZ_Decompress_argc,
             in, insz, out, outsz,
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0); // put lot of fake arguments, who knows the future...
+            0,0,0,0,0,0,0,0,0,0
+            #ifdef CALLCONV_INIT
+                               ,0,0,0,0,0,0,0,0,0,0 // put lot of fake arguments, who knows the future...
+            #endif
+            );
     }
     FREE(p);    // automatically check "if(p)"
     if(!outsz) return -1;   // Oodle returns 0 on error
@@ -294,19 +341,3 @@ int myOodleNetwork1UDP_Encode(void *state, void *shared, void *in, int insz, voi
 }
 
 
-
-#else
-
-
-
-int myOodle_Init(void) { return -1; }
-int myOodleLZ_Compress(unsigned char *in, int insz, unsigned char *out) { return -1; }
-int myOodleLZ_Decompress(unsigned char *in, int insz, unsigned char *out, int outsz, char *algo_name) { return -1; }
-int myOodleNetwork1UDP_State_Uncompact(unsigned char *in, int insz, unsigned char **ret_out, int *ret_outsz) { return -1; }
-int myOodleNetwork1_Shared_SetWindow(unsigned char *in, int insz, unsigned char **ret_out, int *ret_outsz, int bits) { return -1; }
-int myOodleNetwork1UDP_Decode(void *state, void *shared, void *in, int insz, void *out, int outsz) { return -1; }
-int myOodleNetwork1UDP_Encode(void *state, void *shared, void *in, int insz, void *out, int outsz) { return -1; }
-
-
-
-#endif

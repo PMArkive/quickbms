@@ -3,33 +3,50 @@
 // no name was available in the whole source code (unit1, *.pas, projects, nothing, mah...)
 
 
+    static int             /*CurBit,*/ SrcPos;
+    static unsigned char   CurByte;
+    static int             BitCounter;
 
-int sega_lz77(unsigned char *Buf, int File_Size, unsigned char *Buf2) {
-    int             /*CurBit,*/ SrcPos;
-    unsigned char   CurByte;
-    int             BitCounter;
+    static unsigned char   *Buf;
+    static int             File_Size;
+    static int             better;
 
-    unsigned char GetByte_00E1F580(void) {
+    static unsigned char GetByte_00E1F580(void) {
         unsigned char   RESULT;
-        if(SrcPos >= File_Size) return(0);
-        RESULT = Buf[SrcPos];   // xor 0x95 (I don't make the xor because this is a compression
-        SrcPos++;
+        if(better) {
+            RESULT = 0;
+            int     x;  // just a lame solution
+            for(x = 0; x < 8; x++) {
+                BitCounter--;
+                if(!BitCounter) {
+                    if(SrcPos >= File_Size) return(0);
+                    CurByte = Buf[SrcPos++];
+                    BitCounter = 8;
+                }
+                RESULT |= ((CurByte & 1) << x);
+                CurByte >>= 1;
+            }
+        } else {
+            if(SrcPos >= File_Size) return(0);
+            RESULT = Buf[SrcPos];   // xor 0x95 (I don't make the xor because this is a compression
+            SrcPos++;
+        }
         return(RESULT);
     }
 
-    unsigned char GetBit_00E1F5D0(void) {
+    static unsigned char GetBit_00E1F5D0(void) {
         unsigned char   RESULT;
-
         BitCounter--;
         if(!BitCounter) {
             CurByte = GetByte_00E1F580();
             BitCounter = 8;
         }
-        RESULT  = CurByte & 1;
+        RESULT = CurByte & 1;
         CurByte >>= 1;
         return(RESULT);
     }
 
+int sega_lz77(unsigned char *src, int src_size, unsigned char *Buf2, int _better) {
     unsigned int    _EBP_m_4=0, _EBP_m_8=0;
     int             DstPos;
     unsigned char   _EAX;
@@ -38,6 +55,10 @@ int sega_lz77(unsigned char *Buf, int File_Size, unsigned char *Buf2) {
     SrcPos=0;
     DstPos=0;
     BitCounter = 1;
+
+    Buf = src;
+    File_Size = src_size;
+    better = _better;
 
 	while(SrcPos < File_Size) {
 		for(;;) {

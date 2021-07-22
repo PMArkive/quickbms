@@ -210,8 +210,8 @@ static int GetByte(void)   /* get one byte */
     return (int)((i & 0xff00) >> 8);
 }
 
-unsigned putbuf = 0;
-uchar putlen = 0;
+static unsigned putbuf = 0;
+static uchar putlen = 0;
 
 /* initialization of tree */
 
@@ -312,7 +312,7 @@ static void update(int c)
     } while ((c = prnt[c]) != 0); /* repeat up to root */
 }
 
-unsigned code, len;
+static unsigned code, len;
 
 static int DecodeChar(void)
 {

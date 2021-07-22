@@ -532,7 +532,4 @@ int calcc(char *input) {
     return tot;
 }
 
-int main(void) {
-    calcc("asdf");
-    return 0;
-}
+

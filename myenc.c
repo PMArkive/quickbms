@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2018 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -50,17 +50,20 @@ QUICKBMS_int find_replace_string(u8 **mybuf, QUICKBMS_int *buflen, u8 *old, QUIC
 
 
 
-int ctx_getvarnum(u8 **str) {    
+int _ctx_getvarnum(u8 **str, int *is_inout) {
     int     ret = 0;
     u8      *p,
             *l;
 
+    if(is_inout) *is_inout = 0;
     if(str && *str) {
         p = *str;
         if(p[0]) {  // don't waste time
             ctx_skip_spaces(p)          // "  var "
             l = p;
             ctx_skip_non_spaces(l)      // end of "var"
+            if(is_inout && !strnicmp(p, "#INPUT#",  l - p)) *is_inout = 1;
+            if(is_inout && !strnicmp(p, "#OUTPUT#", l - p)) *is_inout = 2;
             ret = getvarnum(p, l - p);
             p = l;
             ctx_skip_spaces(p)          // spaces after "var"
@@ -68,6 +71,10 @@ int ctx_getvarnum(u8 **str) {
         }
     }
     return ret;
+}
+
+int ctx_getvarnum(u8 **str) {
+    return _ctx_getvarnum(str, NULL);
 }
 
 
@@ -310,8 +317,8 @@ typedef struct {
 
 void math_setkey(math_context *ctx, u8 *key, u8 *ivec) {
     QUICKBMS_int    t;
-    u8      *p,
-            *s;
+    int     is_inout = 0;
+    u8      *p;
 
     p = key;
     ctx_skip_spaces(p)   // spaces
@@ -319,12 +326,9 @@ void math_setkey(math_context *ctx, u8 *key, u8 *ivec) {
     ctx->op = set_math_operator(p, &t, &p);
     ctx->sign = t;
     ctx_skip_spaces(p)   // spaces
-    ctx->var2 = getvarnum(p, -1); //readbase(p, 10, NULL);
-    s = p;
-    ctx_skip_non_spaces(p)    // var2 to skip
-    if(!strnicmp(s, "#INPUT#", p - s)) ctx->var2_is_var1 = 1;
-    ctx_skip_spaces(p)   // spaces
-    if(*p) ctx->exact = getvarnum(p, -1); //readbase(p, 10, NULL);
+    ctx->var2 = _ctx_getvarnum(&p, &is_inout);
+    ctx->var2_is_var1 = is_inout;
+    if(*p) ctx->exact = ctx_getvarnum(&p);
 
     ctx->size = ctx_set_size(8, ivec, NULL);
 }
@@ -557,7 +561,7 @@ void flip_crypt(flip_context *ctx, u8 *data, int datalen) {
             *l;
 
     int     bits = ctx->bits;
-    u_int   ret;
+    u64     ret;
     int     i,
             t;
     u8      bc  = 0,
@@ -597,9 +601,9 @@ void flip_crypt(flip_context *ctx, u8 *data, int datalen) {
                     bc = (t < 0) ? 0 : t;
                 }
                 //if(g_endian == MYLITTLE_ENDIAN) { // uhmmm I don't think it's very fast... but works
-                    ret = (ret >> (u_int)1) | (u_int)((((u_int)bc >> (u_int)bp) & (u_int)1) << (u_int)(bits - 1));
+                    ret = (ret >> (u64)1) | (u64)((((u64)bc >> (u64)bp) & (u64)1) << (u64)(bits - 1));
                 //} else {
-                //    ret = (ret << (u_int)1) | (u_int)((((u_int)bc << (u_int)bp) >> (u_int)7) & (u_int)1);
+                //    ret = (ret << (u64)1) | (u64)((((u64)bc << (u64)bp) >> (u64)7) & (u64)1);
                 //}
                 (bp)++;
                 (bp) &= 7; // leave it here
@@ -608,9 +612,9 @@ void flip_crypt(flip_context *ctx, u8 *data, int datalen) {
         if(p >= l) break;
 
         // flipping code
-        u_int num = 0;
+        u64 num = 0;
         for(i = 0; i < bits; i++) {
-            num = (num << (u_int)1) | ((ret >> (u_int)i) & (u_int)1);
+            num = (num << (u64)1) | ((ret >> (u64)i) & (u64)1);
         }
 
         p = p2;
@@ -645,11 +649,11 @@ void flip_crypt(flip_context *ctx, u8 *data, int datalen) {
                     }
                 }
                 //if(g_endian == MYLITTLE_ENDIAN) { // uhmmm I don't think it's very fast... but works
-                    t = (u_int)1 << (u_int)bp;
-                    bit = (num >> (u_int)i) & (u_int)1;
+                    t = (u64)1 << (u64)bp;
+                    bit = (num >> (u64)i) & (u64)1;
                 //} else {
-                //    t = (u_int)1 << (u_int)(7 - bp);
-                //    bit = (num >> (u_int)((bits - i) - 1)) & 1;
+                //    t = (u64)1 << (u64)(7 - bp);
+                //    bit = (num >> (u64)((bits - i) - 1)) & 1;
                 //}
                 if(bit) {
                     bc |= t;   // put 1
@@ -797,144 +801,145 @@ int ssc_setkey(ssc_context *ctx, u8 *key, int keysz) {
 
 // wincrypt
 #ifdef WIN32
+#include <windows.h>
 #include <wincrypt.h>
 
 typedef struct {
-    DWORD   num;
+    void    *num;
     char    *str;
 } wincrypt_types;
 wincrypt_types wincrypt_mspn1[] = { // blah
-    { (DWORD)MS_DEF_DH_SCHANNEL_PROV,  "MS_DEF_DH_SCHANNEL_PROV" },
-    { (DWORD)MS_DEF_DSS_DH_PROV,       "MS_DEF_DSS_DH_PROV" },
-    { (DWORD)MS_DEF_DSS_PROV,          "MS_DEF_DSS_PROV" },
-    { (DWORD)MS_DEF_PROV,              "MS_DEF_PROV" },
-    { (DWORD)MS_DEF_RSA_SCHANNEL_PROV, "MS_DEF_RSA_SCHANNEL_PROV" },
-    { (DWORD)MS_DEF_RSA_SIG_PROV,      "MS_DEF_RSA_SIG_PROV" },
-    { (DWORD)MS_ENH_DSS_DH_PROV,       "MS_ENH_DSS_DH_PROV" },
+    { (void*)   MS_DEF_DH_SCHANNEL_PROV,  "MS_DEF_DH_SCHANNEL_PROV" },
+    { (void*)   MS_DEF_DSS_DH_PROV,       "MS_DEF_DSS_DH_PROV" },
+    { (void*)   MS_DEF_DSS_PROV,          "MS_DEF_DSS_PROV" },
+    { (void*)   MS_DEF_PROV,              "MS_DEF_PROV" },
+    { (void*)   MS_DEF_RSA_SCHANNEL_PROV, "MS_DEF_RSA_SCHANNEL_PROV" },
+    { (void*)   MS_DEF_RSA_SIG_PROV,      "MS_DEF_RSA_SIG_PROV" },
+    { (void*)   MS_ENH_DSS_DH_PROV,       "MS_ENH_DSS_DH_PROV" },
 #ifdef MS_ENH_RSA_AES_PROV
-    { (DWORD)MS_ENH_RSA_AES_PROV,      "MS_ENH_RSA_AES_PROV" },
+    { (void*)   MS_ENH_RSA_AES_PROV,      "MS_ENH_RSA_AES_PROV" },
 #endif
-    { (DWORD)MS_ENHANCED_PROV,         "MS_ENHANCED_PROV" },
-    { (DWORD)MS_SCARD_PROV,            "MS_SCARD_PROV" },
-    { (DWORD)MS_STRONG_PROV,           "MS_STRONG_PROV" },
-    { (DWORD)NULL,                     NULL }
+    { (void*)   MS_ENHANCED_PROV,         "MS_ENHANCED_PROV" },
+    { (void*)   MS_SCARD_PROV,            "MS_SCARD_PROV" },
+    { (void*)   MS_STRONG_PROV,           "MS_STRONG_PROV" },
+    { (void*)   NULL,                     NULL }
 };
 wincrypt_types wincrypt_mspn2[] = { // blah
-    { (DWORD)MS_DEF_DH_SCHANNEL_PROV,  MS_DEF_DH_SCHANNEL_PROV },
-    { (DWORD)MS_DEF_DSS_DH_PROV,       MS_DEF_DSS_DH_PROV },
-    { (DWORD)MS_DEF_DSS_PROV,          MS_DEF_DSS_PROV },
-    { (DWORD)MS_DEF_PROV,              MS_DEF_PROV },
-    { (DWORD)MS_DEF_RSA_SCHANNEL_PROV, MS_DEF_RSA_SCHANNEL_PROV },
-    { (DWORD)MS_DEF_RSA_SIG_PROV,      MS_DEF_RSA_SIG_PROV },
-    { (DWORD)MS_ENH_DSS_DH_PROV,       MS_ENH_DSS_DH_PROV },
+    { (void*)   MS_DEF_DH_SCHANNEL_PROV,  MS_DEF_DH_SCHANNEL_PROV },
+    { (void*)   MS_DEF_DSS_DH_PROV,       MS_DEF_DSS_DH_PROV },
+    { (void*)   MS_DEF_DSS_PROV,          MS_DEF_DSS_PROV },
+    { (void*)   MS_DEF_PROV,              MS_DEF_PROV },
+    { (void*)   MS_DEF_RSA_SCHANNEL_PROV, MS_DEF_RSA_SCHANNEL_PROV },
+    { (void*)   MS_DEF_RSA_SIG_PROV,      MS_DEF_RSA_SIG_PROV },
+    { (void*)   MS_ENH_DSS_DH_PROV,       MS_ENH_DSS_DH_PROV },
 #ifdef MS_ENH_RSA_AES_PROV
-    { (DWORD)MS_ENH_RSA_AES_PROV,      MS_ENH_RSA_AES_PROV },
+    { (void*)   MS_ENH_RSA_AES_PROV,      MS_ENH_RSA_AES_PROV },
 #endif
-    { (DWORD)MS_ENHANCED_PROV,         MS_ENHANCED_PROV },
-    { (DWORD)MS_SCARD_PROV,            MS_SCARD_PROV },
-    { (DWORD)MS_STRONG_PROV,           MS_STRONG_PROV },
-    { (DWORD)NULL,                     NULL }
+    { (void*)   MS_ENHANCED_PROV,         MS_ENHANCED_PROV },
+    { (void*)   MS_SCARD_PROV,            MS_SCARD_PROV },
+    { (void*)   MS_STRONG_PROV,           MS_STRONG_PROV },
+    { (void*)   NULL,                     NULL }
 };
 wincrypt_types wincrypt_prov[] = {
-    { 1,  "PROV_RSA_FULL" },
-    { 2,  "PROV_RSA_SIG" },
-    { 3,  "PROV_DSS" },
-    { 4,  "PROV_FORTEZZA" },
-    { 5,  "PROV_MS_EXCHANGE" },
-    { 5,  "PROV_MS_MAIL" },
-    { 6,  "PROV_SSL" },
-    { 7,  "PROV_STT_MER" },
-    { 8,  "PROV_STT_ACQ" },
-    { 9,  "PROV_STT_BRND" },
-    { 10, "PROV_STT_ROOT" },
-    { 11, "PROV_STT_ISS" },
-    { 12, "PROV_RSA_SCHANNEL" },
-    { 13, "PROV_DSS_DH" },
-    { 14, "PROV_EC_ECDSA_SIG" },
-    { 15, "PROV_EC_ECNRA_SIG" },
-    { 16, "PROV_EC_ECDSA_FULL" },
-    { 17, "PROV_EC_ECNRA_FULL" },
-    { 18, "PROV_DH_SCHANNEL" },
-    { 20, "PROV_SPYRUS_LYNKS" },
-    { 21, "PROV_RNG" },
-    { 22, "PROV_INTEL_SEC" },
-    { 24, "PROV_RSA_AES" },
-    { 0,  NULL }
+    { (void*)   1,  "PROV_RSA_FULL" },
+    { (void*)   2,  "PROV_RSA_SIG" },
+    { (void*)   3,  "PROV_DSS" },
+    { (void*)   4,  "PROV_FORTEZZA" },
+    { (void*)   5,  "PROV_MS_EXCHANGE" },
+    { (void*)   5,  "PROV_MS_MAIL" },
+    { (void*)   6,  "PROV_SSL" },
+    { (void*)   7,  "PROV_STT_MER" },
+    { (void*)   8,  "PROV_STT_ACQ" },
+    { (void*)   9,  "PROV_STT_BRND" },
+    { (void*)   10, "PROV_STT_ROOT" },
+    { (void*)   11, "PROV_STT_ISS" },
+    { (void*)   12, "PROV_RSA_SCHANNEL" },
+    { (void*)   13, "PROV_DSS_DH" },
+    { (void*)   14, "PROV_EC_ECDSA_SIG" },
+    { (void*)   15, "PROV_EC_ECNRA_SIG" },
+    { (void*)   16, "PROV_EC_ECDSA_FULL" },
+    { (void*)   17, "PROV_EC_ECNRA_FULL" },
+    { (void*)   18, "PROV_DH_SCHANNEL" },
+    { (void*)   20, "PROV_SPYRUS_LYNKS" },
+    { (void*)   21, "PROV_RNG" },
+    { (void*)   22, "PROV_INTEL_SEC" },
+    { (void*)   24, "PROV_RSA_AES" },
+    { (void*)   0,  NULL }
 };
 wincrypt_types wincrypt_calg[] = {
-    { 0x00006603, "CALG_3DES" },
-    { 0x00006609, "CALG_3DES_112" },
-    { 0x00006611, "CALG_AES" },
-    { 0x00006611, "CALG_AES" },
-    { 0x0000660e, "CALG_AES_128" },
-    { 0x0000660e, "CALG_AES_128" },
-    { 0x0000660f, "CALG_AES_192" },
-    { 0x0000660f, "CALG_AES_192" },
-    { 0x00006610, "CALG_AES_256" },
-    { 0x00006610, "CALG_AES_256" },
-    { 0x0000aa03, "CALG_AGREEDKEY_ANY" },
-    { 0x0000660c, "CALG_CYLINK_MEK" },
-    { 0x00006601, "CALG_DES" },
-    { 0x00006604, "CALG_DESX" },
-    { 0x0000aa02, "CALG_DH_EPHEM" },
-    { 0x0000aa01, "CALG_DH_SF" },
-    { 0x00002200, "CALG_DSS_SIGN" },
-    { 0x0000aa05, "CALG_ECDH" },
-    { 0x0000aa05, "CALG_ECDH" },
-    { 0x00002203, "CALG_ECDSA" },
-    { 0x00002203, "CALG_ECDSA" },
-    { 0x0000a001, "CALG_ECMQV" },
-    { 0x0000800b, "CALG_HASH_REPLACE_OWF" },
-    { 0x0000800b, "CALG_HASH_REPLACE_OWF" },
-    { 0x0000a003, "CALG_HUGHES_MD5" },
-    { 0x00008009, "CALG_HMAC" },
-    { 0x0000aa04, "CALG_KEA_KEYX" },
-    { 0x00008005, "CALG_MAC" },
-    { 0x00008001, "CALG_MD2" },
-    { 0x00008002, "CALG_MD4" },
-    { 0x00008003, "CALG_MD5" },
-    { 0x00002000, "CALG_NO_SIGN" },
-    { 0xffffffff, "CALG_OID_INFO_CNG_ONLY" },
-    { 0xfffffffe, "CALG_OID_INFO_PARAMETERS" },
-    { 0x00004c04, "CALG_PCT1_MASTER" },
-    { 0x00006602, "CALG_RC2" },
-    { 0x00006801, "CALG_RC4" },
-    { 0x0000660d, "CALG_RC5" },
-    { 0x0000a400, "CALG_RSA_KEYX" },
-    { 0x00002400, "CALG_RSA_SIGN" },
-    { 0x00004c07, "CALG_SCHANNEL_ENC_KEY" },
-    { 0x00004c03, "CALG_SCHANNEL_MAC_KEY" },
-    { 0x00004c02, "CALG_SCHANNEL_MASTER_HASH" },
-    { 0x00006802, "CALG_SEAL" },
-    { 0x00008004, "CALG_SHA" },
-    { 0x00008004, "CALG_SHA1" },
-    { 0x0000800c, "CALG_SHA_256" },
-    { 0x0000800c, "CALG_SHA_256" },
-    { 0x0000800d, "CALG_SHA_384" },
-    { 0x0000800d, "CALG_SHA_384" },
-    { 0x0000800e, "CALG_SHA_512" },
-    { 0x0000800e, "CALG_SHA_512" },
-    { 0x0000660a, "CALG_SKIPJACK" },
-    { 0x00004c05, "CALG_SSL2_MASTER" },
-    { 0x00004c01, "CALG_SSL3_MASTER" },
-    { 0x00008008, "CALG_SSL3_SHAMD5" },
-    { 0x0000660b, "CALG_TEK" },
-    { 0x00004c06, "CALG_TLS1_MASTER" },
-    { 0x0000800a, "CALG_TLS1PRF" },
-    { 0,          NULL }
+    { (void*)   0x00006603, "CALG_3DES" },
+    { (void*)   0x00006609, "CALG_3DES_112" },
+    { (void*)   0x00006611, "CALG_AES" },
+    { (void*)   0x00006611, "CALG_AES" },
+    { (void*)   0x0000660e, "CALG_AES_128" },
+    { (void*)   0x0000660e, "CALG_AES_128" },
+    { (void*)   0x0000660f, "CALG_AES_192" },
+    { (void*)   0x0000660f, "CALG_AES_192" },
+    { (void*)   0x00006610, "CALG_AES_256" },
+    { (void*)   0x00006610, "CALG_AES_256" },
+    { (void*)   0x0000aa03, "CALG_AGREEDKEY_ANY" },
+    { (void*)   0x0000660c, "CALG_CYLINK_MEK" },
+    { (void*)   0x00006601, "CALG_DES" },
+    { (void*)   0x00006604, "CALG_DESX" },
+    { (void*)   0x0000aa02, "CALG_DH_EPHEM" },
+    { (void*)   0x0000aa01, "CALG_DH_SF" },
+    { (void*)   0x00002200, "CALG_DSS_SIGN" },
+    { (void*)   0x0000aa05, "CALG_ECDH" },
+    { (void*)   0x0000aa05, "CALG_ECDH" },
+    { (void*)   0x00002203, "CALG_ECDSA" },
+    { (void*)   0x00002203, "CALG_ECDSA" },
+    { (void*)   0x0000a001, "CALG_ECMQV" },
+    { (void*)   0x0000800b, "CALG_HASH_REPLACE_OWF" },
+    { (void*)   0x0000800b, "CALG_HASH_REPLACE_OWF" },
+    { (void*)   0x0000a003, "CALG_HUGHES_MD5" },
+    { (void*)   0x00008009, "CALG_HMAC" },
+    { (void*)   0x0000aa04, "CALG_KEA_KEYX" },
+    { (void*)   0x00008005, "CALG_MAC" },
+    { (void*)   0x00008001, "CALG_MD2" },
+    { (void*)   0x00008002, "CALG_MD4" },
+    { (void*)   0x00008003, "CALG_MD5" },
+    { (void*)   0x00002000, "CALG_NO_SIGN" },
+    { (void*)   0xffffffff, "CALG_OID_INFO_CNG_ONLY" },
+    { (void*)   0xfffffffe, "CALG_OID_INFO_PARAMETERS" },
+    { (void*)   0x00004c04, "CALG_PCT1_MASTER" },
+    { (void*)   0x00006602, "CALG_RC2" },
+    { (void*)   0x00006801, "CALG_RC4" },
+    { (void*)   0x0000660d, "CALG_RC5" },
+    { (void*)   0x0000a400, "CALG_RSA_KEYX" },
+    { (void*)   0x00002400, "CALG_RSA_SIGN" },
+    { (void*)   0x00004c07, "CALG_SCHANNEL_ENC_KEY" },
+    { (void*)   0x00004c03, "CALG_SCHANNEL_MAC_KEY" },
+    { (void*)   0x00004c02, "CALG_SCHANNEL_MASTER_HASH" },
+    { (void*)   0x00006802, "CALG_SEAL" },
+    { (void*)   0x00008004, "CALG_SHA" },
+    { (void*)   0x00008004, "CALG_SHA1" },
+    { (void*)   0x0000800c, "CALG_SHA_256" },
+    { (void*)   0x0000800c, "CALG_SHA_256" },
+    { (void*)   0x0000800d, "CALG_SHA_384" },
+    { (void*)   0x0000800d, "CALG_SHA_384" },
+    { (void*)   0x0000800e, "CALG_SHA_512" },
+    { (void*)   0x0000800e, "CALG_SHA_512" },
+    { (void*)   0x0000660a, "CALG_SKIPJACK" },
+    { (void*)   0x00004c05, "CALG_SSL2_MASTER" },
+    { (void*)   0x00004c01, "CALG_SSL3_MASTER" },
+    { (void*)   0x00008008, "CALG_SSL3_SHAMD5" },
+    { (void*)   0x0000660b, "CALG_TEK" },
+    { (void*)   0x00004c06, "CALG_TLS1_MASTER" },
+    { (void*)   0x0000800a, "CALG_TLS1PRF" },
+    { (void*)   0,          NULL }
 };
 wincrypt_types wincrypt_flags[] = {
-    { 1,          "CRYPT_EXPORTABLE" },
-    { 2,          "CRYPT_USER_PROTECTED" },
-    { 4,          "CRYPT_CREATE_SALT" },
-    { 8,          "CRYPT_UPDATE_KEY" },
-    { 0x00000400, "CRYPT_SERVER" },
-    { 0,          NULL }
+    { (void*)   1,          "CRYPT_EXPORTABLE" },
+    { (void*)   2,          "CRYPT_USER_PROTECTED" },
+    { (void*)   4,          "CRYPT_CREATE_SALT" },
+    { (void*)   8,          "CRYPT_UPDATE_KEY" },
+    { (void*)   0x00000400, "CRYPT_SERVER" },
+    { (void*)   0,          NULL }
 };
 wincrypt_types wincrypt_flags2[] = {
-    { 0x00000040, "CRYPT_OAEP" },
-    { 0x00000020, "CRYPT_DECRYPT_RSA_NO_PADDING_CHECK" },
-    { 0,          NULL }
+    { (void*)   0x00000040, "CRYPT_OAEP" },
+    { (void*)   0x00000020, "CRYPT_DECRYPT_RSA_NO_PADDING_CHECK" },
+    { (void*)   0,          NULL }
 };
 
 typedef struct {
@@ -949,14 +954,19 @@ typedef struct {
     DWORD       flags2;
 } wincrypt_context;
 
-u8 *wincrypt_parameters(u8 *parameters, wincrypt_types *types, DWORD *ret) {
-    DWORD   tmp;
+void *wincrypt_parameters(u8 **ret_parameters, wincrypt_types *types) {
     int     i,
             len,
             quote = 0;
     u8      *p,
             *pquote = NULL,
             *pret;
+    void    *tmp,
+            *ret    = NULL;
+
+    if(!ret_parameters) return NULL;
+    u8  *parameters = *ret_parameters;
+    *ret_parameters = NULL; // set error
 
     if(!parameters) return NULL;
     if(!parameters[0]) return NULL;
@@ -981,17 +991,19 @@ u8 *wincrypt_parameters(u8 *parameters, wincrypt_types *types, DWORD *ret) {
     len = p - parameters;
     if(len <= 0) return NULL;
 
-    tmp = getvarnum(parameters, -1); //readbase(parameters, 10, NULL);
+    tmp = (void*)getvarnum(parameters, -1); //readbase(parameters, 10, NULL);
     for(i = 0; types[i].str; i++) {
         if(
             (!strnicmp(types[i].str, parameters, len) && !types[i].str[len])
          || (tmp == types[i].num)) {
-            *ret = (DWORD)types[i].num;
+            ret = types[i].num;
             if(!pret[0]) return NULL;
             return(pret + 1);
         }
     }
-    return(parameters);
+
+    *ret_parameters = parameters;
+    return(ret);
 }
 
 int wincrypt_setkey(wincrypt_context *ctx, u8 *key, int keysz, u8 *parameters) {
@@ -1015,13 +1027,13 @@ int wincrypt_setkey(wincrypt_context *ctx, u8 *key, int keysz, u8 *parameters) {
 
     if(parameters) {
         p = parameters;
-        p = wincrypt_parameters(p, wincrypt_calg,   &ctx->hash);
-        p = wincrypt_parameters(p, wincrypt_calg,   &ctx->algo);
-        p = wincrypt_parameters(p, wincrypt_prov,   &ctx->prov);
-        p = wincrypt_parameters(p, wincrypt_mspn1,  (DWORD *)&ctx->mspn);
-        p = wincrypt_parameters(p, wincrypt_mspn2,  (DWORD *)&ctx->mspn);
-        p = wincrypt_parameters(p, wincrypt_flags,  &ctx->flags);
-        p = wincrypt_parameters(p, wincrypt_flags2, &ctx->flags2);
+        ctx->hash   = (DWORD)wincrypt_parameters(&p, wincrypt_calg);
+        ctx->algo   = (DWORD)wincrypt_parameters(&p, wincrypt_calg);
+        ctx->prov   = (DWORD)wincrypt_parameters(&p, wincrypt_prov);
+        ctx->mspn   =        wincrypt_parameters(&p, wincrypt_mspn1);
+        ctx->mspn   =        wincrypt_parameters(&p, wincrypt_mspn2);
+        ctx->flags  = (DWORD)wincrypt_parameters(&p, wincrypt_flags);
+        ctx->flags2 = (DWORD)wincrypt_parameters(&p, wincrypt_flags2);
     }
 
     for(i = 0; flags[i] >= 0; i++) {
@@ -1428,7 +1440,9 @@ funny note: this is also how NVIDIA encrypts the data located in the bin(/toc) f
 */
 int bcrypt_encrypt(bcrypt_context *ctx, u8 *input, int input_size, u8 *output, int output_size, int encrypt) {
 #ifdef WIN32
-    if(!BCrypt_init()) return -1;   // this is a function written by me for avoid direct linking, so the program can run on Win98 too
+    #ifdef QUICKBMS_BCrypt_init
+    if(!BCrypt_init()) return -1;   // this is a function written by me to avoid direct linking, so the program can run on Win98 too
+    #endif
 
     if(!ctx) return -1;
 
@@ -1567,7 +1581,7 @@ int rng_setkey(u8 *key, u8 *iv) {
     return 0;
 }
 
-int rng_crypt(u8 *data, int len, int type) {
+int rng_crypt(u8 *data, int len) {
     if(len < 0) return -1;
     if(!data || !len) return 0;
     
@@ -1617,10 +1631,10 @@ int replace_setkey(replace_ctx_t *ctx, u8 *key, int keysz, u8 *iv, int ivsz) {
     return 0;
 }
 
-int replace_crypt(replace_ctx_t *ctx, u8 *data, int len, int type) {
+int replace_crypt(replace_ctx_t *ctx, u8 *data, int len) {
     if(ctx->nextsz > ctx->prevsz) return -1;
     QUICKBMS_int    ret = len;
     find_replace_string(&data, &ret, ctx->prev, ctx->prevsz, ctx->next, ctx->nextsz);
-    return len;
+    return ret;
 }
 

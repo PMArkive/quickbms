@@ -1,5 +1,5 @@
 /*
-    Copyright 2010-2018 Luigi Auriemma
+    Copyright 2010-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
 */
 
 /*
-  x86 32bit calling conventions 0.2.2a
+  x86 32bit calling conventions 0.2.2b
   ------------------------------------
   quick library for calling the 32bit functions (mainly dumped functions)
   that use the following calling conventions:
@@ -57,18 +57,6 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-#define CALLCONV_INIT   va_list ap; \
-                        long    i, \
-                                ret, \
-                                argv[argc]; \
-                        \
-                        va_start(ap, argc); \
-                        for(i = 0; i < argc; i++) { \
-                            argv[i] = va_arg(ap, long); \
-                        } \
-                        va_end(ap);
-#define CALLCONV_ASM    __asm__ __volatile__ 
-
 
 
 // 32bit registers
@@ -76,6 +64,30 @@
 // the 32bit dumped code on both x86 and x86_64
 #if defined(i386) || defined(IA64)
 
+    #define CALLCONV_INIT   va_list ap; \
+                            long    i, \
+                                    ret, \
+                                    argv[argc]; \
+                            \
+                            va_start(ap, argc); \
+                            for(i = 0; i < argc; i++) { \
+                                argv[i] = va_arg(ap, long); \
+                            } \
+                            va_end(ap);
+    #define CALLCONV_ASM    __asm__ __volatile__ 
+
+    #define CALLCONV_EBX    ,"%ebx" // clobbered
+    #define CALLCONV_EDI    ,"%edi" // constraint
+    #define CALLCONV_ESI    ,"%esi" // constraint
+    #define CALLCONV_CONSTRAINTS
+    #if __PIC__ // both -fpic and -fPIC
+        #define CALLCONV_EBX  // "error: PIC register clobbered by '%ebx' in 'asm'"
+        #ifndef WIN32   // it works on Linux only with -O0
+            #define CALLCONV_EDI
+            #define CALLCONV_ESI
+            #undef  CALLCONV_CONSTRAINTS
+        #endif
+    #endif
 
 
     // too complex, not implemented yet:
@@ -102,14 +114,16 @@
         }
 
         // eax ecx edx ebx esi edi
-        if(argc > 6) CALLCONV_ASM("movl %0, %%edi" :: "g"(argv[6]) : "%eax", "%ecx", "%edx", "%ebx", "%esi"         );
-        if(argc > 5) CALLCONV_ASM("movl %0, %%esi" :: "g"(argv[5]) : "%eax", "%ecx", "%edx", "%ebx",         "%edi" );
-        if(argc > 4) CALLCONV_ASM("movl %0, %%ebx" :: "g"(argv[4]) : "%eax", "%ecx", "%edx",         "%esi", "%edi" );
-        if(argc > 3) CALLCONV_ASM("movl %0, %%edx" :: "g"(argv[3]) : "%eax", "%ecx",         "%ebx", "%esi", "%edi" );
-        if(argc > 2) CALLCONV_ASM("movl %0, %%ecx" :: "g"(argv[2]) : "%eax",         "%edx", "%ebx", "%esi", "%edi" );
-        if(argc > 1) CALLCONV_ASM("movl %0, %%eax" :: "g"(argv[1]) :         "%ecx", "%edx", "%ebx", "%esi", "%edi" );
+#ifdef CALLCONV_CONSTRAINTS
+        if(argc > 6) CALLCONV_ASM("movl %0, %%edi" :: "g"(argv[6]) : "%eax", "%ecx", "%edx" CALLCONV_EBX CALLCONV_ESI             );
+        if(argc > 5) CALLCONV_ASM("movl %0, %%esi" :: "g"(argv[5]) : "%eax", "%ecx", "%edx" CALLCONV_EBX              CALLCONV_EDI);
+#endif
+        if(argc > 4) CALLCONV_ASM("movl %0, %%ebx" :: "g"(argv[4]) : "%eax", "%ecx", "%edx"              CALLCONV_ESI CALLCONV_EDI);
+        if(argc > 3) CALLCONV_ASM("movl %0, %%edx" :: "g"(argv[3]) : "%eax", "%ecx"         CALLCONV_EBX CALLCONV_ESI CALLCONV_EDI);
+        if(argc > 2) CALLCONV_ASM("movl %0, %%ecx" :: "g"(argv[2]) : "%eax",         "%edx" CALLCONV_EBX CALLCONV_ESI CALLCONV_EDI);
+        if(argc > 1) CALLCONV_ASM("movl %0, %%eax" :: "g"(argv[1]) :         "%ecx", "%edx" CALLCONV_EBX CALLCONV_ESI CALLCONV_EDI);
 
-        CALLCONV_ASM("call *%0" :: "g"(func) : "%eax", "%ecx", "%edx", "%ebx", "%esi", "%edi" );
+                     CALLCONV_ASM("call *%0"       :: "g"(func)    : "%eax", "%ecx", "%edx" CALLCONV_EBX CALLCONV_ESI CALLCONV_EDI);
 
         switch(ret_type) {
             case 0: CALLCONV_ASM("movl %%eax, %0" : "=g"(ret)); break;
@@ -224,12 +238,12 @@
             CALLCONV_ASM("push %0" :: "g"(argv[i]));
         }
 
-        if(argc > 3) CALLCONV_ASM("movl %0, %%ecx" :: "g"(argv[3]) : "%eax","%edx","%ebx"       );
-        if(argc > 2) CALLCONV_ASM("movl %0, %%ebx" :: "g"(argv[2]) : "%eax","%edx",       "%ecx");
-        if(argc > 1) CALLCONV_ASM("movl %0, %%edx" :: "g"(argv[1]) : "%eax",       "%ebx","%ecx");
-        if(argc > 0) CALLCONV_ASM("movl %0, %%eax" :: "g"(argv[0]) :        "%edx","%ebx","%ecx");
+        if(argc > 3) CALLCONV_ASM("movl %0, %%ecx" :: "g"(argv[3]) : "%eax","%edx"        CALLCONV_EBX);
+        if(argc > 2) CALLCONV_ASM("movl %0, %%ebx" :: "g"(argv[2]) : "%eax","%edx","%ecx"             );
+        if(argc > 1) CALLCONV_ASM("movl %0, %%edx" :: "g"(argv[1]) : "%eax"       ,"%ecx" CALLCONV_EBX);
+        if(argc > 0) CALLCONV_ASM("movl %0, %%eax" :: "g"(argv[0]) :        "%edx","%ecx" CALLCONV_EBX);
 
-        CALLCONV_ASM("call *%0" :: "g"(func) : "%eax","%edx","%ebx","%ecx");
+        CALLCONV_ASM("call *%0" :: "g"(func) : "%eax","%edx","%ecx" CALLCONV_EBX);
         CALLCONV_ASM("movl %%eax, %0" : "=g"(ret));
         return(ret);
     }
@@ -296,12 +310,12 @@
             CALLCONV_ASM("push %0" :: "g"(argv[i]));
         }
 
-        if(argc > 3) CALLCONV_ASM("movl %0, %%edx" :: "g"(argv[3]) : "%eax","%ebx","%ecx"       );
-        if(argc > 2) CALLCONV_ASM("movl %0, %%ecx" :: "g"(argv[2]) : "%eax","%ebx",       "%edx");
-        if(argc > 1) CALLCONV_ASM("movl %0, %%ebx" :: "g"(argv[1]) : "%eax",       "%ecx","%edx");
-        if(argc > 0) CALLCONV_ASM("movl %0, %%eax" :: "g"(argv[0]) :        "%ebx","%ecx","%edx");
+        if(argc > 3) CALLCONV_ASM("movl %0, %%edx" :: "g"(argv[3]) : "%eax","%ecx"        CALLCONV_EBX);
+        if(argc > 2) CALLCONV_ASM("movl %0, %%ecx" :: "g"(argv[2]) : "%eax",       "%edx" CALLCONV_EBX);
+        if(argc > 1) CALLCONV_ASM("movl %0, %%ebx" :: "g"(argv[1]) : "%eax","%ecx","%edx"             );
+        if(argc > 0) CALLCONV_ASM("movl %0, %%eax" :: "g"(argv[0]) :        "%ecx","%edx" CALLCONV_EBX);
 
-        CALLCONV_ASM("call *%0" :: "g"(func) : "%eax","%ebx","%ecx","%edx");
+        CALLCONV_ASM("call *%0" :: "g"(func) : "%eax","%ecx","%edx" CALLCONV_EBX);
         CALLCONV_ASM("movl %%eax, %0" : "=g"(ret));
         //CALLCONV_ASM("movl %%edx, %0" : "=g"(ret));  // for pointers
         return(ret);
@@ -311,18 +325,22 @@
 
 #else
 
-    #define usercall_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__) // wrong
-    #define cdecl_call(FUNC, ARGC, ...) __cdecl__   FUNC(__VA_ARGS__)
-    #define stdcall_call(FUNC, ARGC, ...) __stdcall__ FUNC(__VA_ARGS__)
-    #define thiscall_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__)
+    #define usercall_call(FUNC, ARGC, ...)   FUNC(__VA_ARGS__) // wrong
+    #define cdecl_call(FUNC, ARGC, ...)      (__cdecl   FUNC)(__VA_ARGS__)
+    #ifdef WIN32    // don't use #ifdef __stdcall here
+    #define stdcall_call(FUNC, ARGC, ...)    (__stdcall FUNC)(__VA_ARGS__)
+    #else
+    #define stdcall_call(FUNC, ARGC, ...)    (          FUNC)(__VA_ARGS__)
+    #endif
+    #define thiscall_call(FUNC, ARGC, ...)   FUNC(__VA_ARGS__)
     #define msfastcall_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__)
-    #define borland_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__)
-    #define pascal_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__)
-    #define watcom_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__)
-    #define safecall_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__)
-    #define syscall_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__)
-    #define optlink_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__)
-    #define clarion_call(FUNC, ARGC, ...) FUNC(__VA_ARGS__)
+    #define borland_call(FUNC, ARGC, ...)    FUNC(__VA_ARGS__)
+    #define pascal_call(FUNC, ARGC, ...)     FUNC(__VA_ARGS__)
+    #define watcom_call(FUNC, ARGC, ...)     FUNC(__VA_ARGS__)
+    #define safecall_call(FUNC, ARGC, ...)   FUNC(__VA_ARGS__)
+    #define syscall_call(FUNC, ARGC, ...)    FUNC(__VA_ARGS__)
+    #define optlink_call(FUNC, ARGC, ...)    FUNC(__VA_ARGS__)
+    #define clarion_call(FUNC, ARGC, ...)    FUNC(__VA_ARGS__)
 
 #endif
 

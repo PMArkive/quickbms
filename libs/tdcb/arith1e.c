@@ -280,9 +280,13 @@ SYMBOL *s;
  * by declaring them as short ints, they will actually be 16 bits
  * on most 80X86 and 680X0 machines, as well as VAXen.
  */
+#define code    arith1e_code
 static unsigned short int code;  /* The present input code value       */
+#define low     arith1e_low
 static unsigned short int low;   /* Start of the current code range    */
+#define high    arith1e_high
 static unsigned short int high;  /* End of the current code range      */
+#define underflow_bits  arith1e_underflow_bits
 long underflow_bits;             /* Number of underflow bits pending   */
 
 /*

@@ -1,5 +1,5 @@
 // File: lzham_symbol_codec.cpp
-// See Copyright Notice and license at the end of include/lzham.h
+// LZHAM is in the Public Domain. Please see the Public Domain declaration at the end of include/lzham.h
 #include "lzham_core.h"
 #include "lzham_symbol_codec.h"
 #include "lzham_huffman_codes.h"
@@ -581,7 +581,7 @@ namespace lzham
       freq++;
       m_sym_freq[sym] = static_cast<uint16>(freq);
 
-      LZHAM_ASSERT(freq <= UINT16_MAX);
+      LZHAM_ASSERT(freq <= LZHAM_UINT16_MAX);
 
       if (--m_symbols_until_update == 0)
       {
@@ -828,7 +828,7 @@ namespace lzham
       freq++;
       model.m_sym_freq[sym] = static_cast<uint16>(freq);
       
-      LZHAM_ASSERT(freq <= UINT16_MAX);
+      LZHAM_ASSERT(freq <= LZHAM_UINT16_MAX);
 
       if (--model.m_symbols_until_update == 0)
       {
@@ -1265,8 +1265,8 @@ namespace lzham
       {
          uint32 t = pTables->m_lookup[m_bit_buf >> (cBitBufSize - pTables->m_table_bits)];
 
-         LZHAM_ASSERT(t != UINT32_MAX);
-         sym = t & UINT16_MAX;
+         LZHAM_ASSERT(t != LZHAM_UINT32_MAX);
+         sym = t & LZHAM_UINT16_MAX;
          len = t >> 16;
 
          LZHAM_ASSERT(model.m_code_sizes[sym] == len);
@@ -1301,7 +1301,7 @@ namespace lzham
       freq++;
       model.m_sym_freq[sym] = static_cast<uint16>(freq);
       
-      LZHAM_ASSERT(freq <= UINT16_MAX);
+      LZHAM_ASSERT(freq <= LZHAM_UINT16_MAX);
       
       if (--model.m_symbols_until_update == 0)
       {

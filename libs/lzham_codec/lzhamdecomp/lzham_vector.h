@@ -1,7 +1,7 @@
 // File: lzham_vector.h
-// See Copyright Notice and license at the end of include/lzham.h
+// LZHAM is in the Public Domain. Please see the Public Domain declaration at the end of include/lzham.h
 #pragma once
-#include <string.h>
+#include <string.h> // memmove
 
 namespace lzham
 {

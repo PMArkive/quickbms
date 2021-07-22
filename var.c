@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2019 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -67,6 +67,13 @@ void check_variable_errors(int idx, variable_t *myvar) {
 
 
 
+int is_MEMORY_FILE(u8 *str) {
+    if(str && !strnicmp(str, MEMORY_FNAME, MEMORY_FNAMESZ)) return 1;
+    return 0;
+}
+
+
+
 int get_memory_file(u8 *str) {
     int     ret = 0;    // because -1 is returned for MEMORY_FILE
 
@@ -75,7 +82,19 @@ int get_memory_file(u8 *str) {
     // MEMORY_FILE2 = -2
 
     if(str) {
-        ret = myatoi(str + MEMORY_FNAMESZ);
+        if(str[MEMORY_FNAMESZ] == '[') {
+            u8  *p = str + MEMORY_FNAMESZ + 1;
+            u8  *l = strchr(p, ']');
+            if(!l) l = p + strlen(p);
+            int     idx = get_var_from_name(p, l - p);
+            if(idx >= 0) {
+                ret = get_var32(idx);
+            } else {
+                ret = myatoi(p);
+            }
+        } else {
+            ret = myatoi(str + MEMORY_FNAMESZ);
+        }
         if(!ret) ret++;
         if((ret < 0) || (ret > MAX_FILES)) {
             fprintf(stderr, "\nError: too big MEMORY_FILE number\n");
@@ -139,6 +158,7 @@ int add_datatype(u8 *str) {
         if(!stricmp(str, "input_folder"))   return BMS_TYPE_INOUT_FOLDER;
         if(!stricmp(str, "output_folder"))  return BMS_TYPE_INOUT_FOLDER;
         if(!stricmp(str, "bms_folder"))     return BMS_TYPE_BMS_FOLDER;
+        if(!stricmp(str, "exe_folder"))     return BMS_TYPE_EXE_FOLDER;
         if(!stricmp(str, "Unicode"))        return BMS_TYPE_UNICODE;
         if(!stricmp(str, "UTF-16"))         return BMS_TYPE_UNICODE;
         if(!stricmp(str, "UTF16"))          return BMS_TYPE_UNICODE;
@@ -230,11 +250,77 @@ int add_datatype(u8 *str) {
         if(strstr(str,   "24"))             return BMS_TYPE_THREEBYTE;
         if(strstr(str,   "16"))             return BMS_TYPE_SHORT;
         if(strstr(str,   "8"))              return BMS_TYPE_BYTE;
+
+        if(!stricmp(str, "regex"))          return BMS_TYPE_REGEX;
+        if(!stricmp(str, "???"))            return BMS_TYPE_PROMPT;
+        if(!stricmp(str, "prompt"))         return BMS_TYPE_PROMPT;
+        if(!stricmp(str, "input"))          return BMS_TYPE_PROMPT;
         // nothing must be added here
     }
     fprintf(stderr, "\nError: invalid datatype %s at line %d\n", str, (i32)g_bms_line_number);
     myexit(QUICKBMS_ERROR_BMS);
     return -1;
+}
+
+
+
+u8 *datatype_to_string(i32 type) {
+    switch(type) {
+        case BMS_TYPE_BYTE:             return "unsigned char"; break;
+        case BMS_TYPE_SHORT:            return "unsigned short"; break;
+        case BMS_TYPE_THREEBYTE:        return "unsigned int"; break;
+        case BMS_TYPE_LONG:             return "unsigned int"; break;
+        case BMS_TYPE_LONGLONG:         return "unsigned long long"; break;
+        case BMS_TYPE_STRING:           return "char *"; break;
+        case BMS_TYPE_ASIZE:            return "int"; break;
+        case BMS_TYPE_PURETEXT:         return "char *"; break;
+        case BMS_TYPE_PURENUMBER:       return "int"; break;
+        case BMS_TYPE_TEXTORNUMBER:     return "int"; break;
+        case BMS_TYPE_FILENUMBER:       return "int"; break;
+        case BMS_TYPE_FILENAME:         return "char *"; break;
+        case BMS_TYPE_BASENAME:         return "char *"; break;
+        case BMS_TYPE_EXTENSION:        return "char *"; break;
+        case BMS_TYPE_UNICODE:          return "wchar_t *"; break;
+        case BMS_TYPE_BINARY:           return "unsigned char *"; break;
+        case BMS_TYPE_LINE:             return "char *"; break;
+        case BMS_TYPE_FULLNAME:         return "char *"; break;
+        case BMS_TYPE_CURRENT_FOLDER:   return "char *"; break;
+        case BMS_TYPE_FILE_FOLDER:      return "char *"; break;
+        case BMS_TYPE_INOUT_FOLDER:     return "char *"; break;
+        case BMS_TYPE_BMS_FOLDER:       return "char *"; break;
+        case BMS_TYPE_EXE_FOLDER:       return "char *"; break;
+        case BMS_TYPE_ALLOC:            return "unsigned char *"; break;
+        case BMS_TYPE_COMPRESSED:       return "unsigned char *"; break;
+        case BMS_TYPE_FLOAT:            return "float"; break;
+        case BMS_TYPE_DOUBLE:           return "double"; break;
+        case BMS_TYPE_LONGDOUBLE:       return "long double"; break;
+        case BMS_TYPE_VARIABLE:         return "void *"; break;
+        case BMS_TYPE_VARIABLE2:        return "void *"; break;
+        case BMS_TYPE_VARIANT:          return "void *"; break;
+        case BMS_TYPE_BITS:             return "char *"; break;
+        case BMS_TYPE_TIME:             return "char *"; break;
+        case BMS_TYPE_TIME64:           return "char *"; break;
+        case BMS_TYPE_CLSID:            return "char *"; break;
+        case BMS_TYPE_IPV4:             return "char *"; break;
+        case BMS_TYPE_IPV6:             return "char *"; break;
+        case BMS_TYPE_VARIABLE3:        return "void *"; break;
+        case BMS_TYPE_SIGNED_BYTE:      return "signed char"; break;
+        case BMS_TYPE_SIGNED_SHORT:     return "signed short"; break;
+        case BMS_TYPE_SIGNED_THREEBYTE: return "signed int"; break;
+        case BMS_TYPE_SIGNED_LONG:      return "signed long"; break;
+        case BMS_TYPE_VARIABLE4:        return "void *"; break;
+        case BMS_TYPE_VARIABLE5:        return "void *"; break;
+        case BMS_TYPE_FILEPATH:         return "char *"; break;
+        case BMS_TYPE_FULLBASENAME:     return "char *"; break;
+        case BMS_TYPE_TO_UNICODE:       return "wchar_t *"; break;
+        case BMS_TYPE_TCC:              return "void *"; break;
+        case BMS_TYPE_VARIABLE6:        return "void *"; break;
+        case BMS_TYPE_VARIABLE7:        return "void *"; break;
+        case BMS_TYPE_UNICODE32:        return "wchar_t *"; break;
+        case BMS_TYPE_PROMPT:           return "char *"; break;
+        default: break;
+    }
+    return "int";
 }
 
 
@@ -370,7 +456,7 @@ X5  array
         /* else if(g_verbose < 0) printf("               %-10s \"%s\"\n", g_variable[idx].name, g_variable[idx].value); */ \
         return(X2); \
     } \
-    if(g_variable[idx].name[0] && strnicmp(g_variable[idx].name, MEMORY_FNAME, MEMORY_FNAMESZ)) { /* "" is for sequential file names */ \
+    if(g_variable[idx].name[0] && !is_MEMORY_FILE(g_variable[idx].name)) { /* "" is for sequential file names */ \
         if(g_verbose > 0) printf("- variable \"%s\" seems uninitialized, I use its name\n", g_variable[idx].name); \
         /* else if(g_verbose < 0) printf("               %-10s \"%s\"\n", g_variable[idx].name, g_variable[idx].name); */ \
         /* myexit(QUICKBMS_ERROR_BMS); */ \
@@ -499,14 +585,15 @@ int var_is_a_constant_string(int idx) {
 
 
 
-void *get_var_ptr_cmd(int idx, int cmd, int cmd_idx, int parse_strings, int *ret_size) {
+void *get_var_ptr_cmd(int idx, int cmd, int cmd_idx, int parse_strings, int *ret_size, int *retn) {
     void    *ptr = NULL;
     int     n;
 
+    if(retn) *retn = 0;
     if(ret_size) *ret_size = 0;
     n = (cmd_idx < 0) ? idx : CMD.var[cmd_idx];
     if(n < 0) {    // MEMORY_FILE
-        n = -n;
+        n = myabs(n);
         ptr = (void *)g_memory_file[n].data + g_memory_file[n].pos;
         if(ret_size) {
             *ret_size = g_memory_file[n].size - g_memory_file[n].pos;
@@ -525,11 +612,16 @@ void *get_var_ptr_cmd(int idx, int cmd, int cmd_idx, int parse_strings, int *ret
                 if(ret_size) *ret_size = sizeof(int);
             } else {
                 // return a negative value for numbers
-                if(g_variable[n].isnum < 0) {
-                    ptr = (void *)get_var32(n); // cannot return g_variable[n].float64;
-                    if(ret_size) *ret_size = -2;
+                // if insum < 0, cannot return g_variable[n].float64;
+                if(retn) {
+                    *retn = get_var32(n);
+                    ptr = (void *)(*retn);
                 } else {
                     ptr = (void *)get_var32(n);
+                }
+                if(g_variable[n].isnum < 0) {
+                    if(ret_size) *ret_size = -2;
+                } else {
                     if(ret_size) *ret_size = -1;
                 }
             }
@@ -575,7 +667,7 @@ int check_sub_vars(int idx, int create_if_unexistent) {
         i = g_variable[idx].sub_var->arrays;
         g_variable[idx].sub_var->arrays++;
         memset(&g_variable[idx].sub_var->array[i], 0, sizeof(data_t));
-        g_variable[idx].sub_var->array[i].info = malloc_copy(NULL, tmp32, sz);
+        malloc_copy((void **)&g_variable[idx].sub_var->array[i].info, tmp32, sz);
     }
     return i;
 }
@@ -695,142 +787,6 @@ int add_varval(int idx, /*u8 *name,*/ u8 *val, int val32, int valsz) {
 
 
 
-int *add_multi_dimensional(u8 *name, int *sub_vars);
-
-
-
-int add_var(int idx, u8 *name, u8 *val, int val32, int valsz) {
-    int     sub_vars    = 0,
-            *sub_var    = NULL,
-            t;
-
-    int     is_const    = g_lame_add_var_const_workaround;
-    g_lame_add_var_const_workaround = 0;
-
-
-    // do NOT touch valsz, it's a job of strdup_replace
-    var_check_idx(idx, __LINE__);
-    //if((valsz == -2) && !name) name = ""; // specific for the ARGs, only in case of errors in my programming
-    // if(valsz < 0) valsz = STRINGSZ;  do NOT do this, valsz is calculated on the length of val
-    if(!name) {  // && (idx >= 0)) {
-        //name = g_variable[idx].name; // unused
-        if(add_varval(idx, val, val32, valsz) < 0) goto quit_error;
-        //goto quit;
-    } else {    // used only when the bms file is parsed at the beginning
-        sub_var = add_multi_dimensional(name, &sub_vars);
-
-        if(!stricmp(name, "EXTRCNT") || !stricmp(name, "BytesRead") || !stricmp(name, "NotEOF") || !stricmp(name, "SOF") || !stricmp(name, "EOF")) {
-            if(!g_mex_default) {
-                g_mex_default = 1;    // this avoids to waste cpu for these boring and useless variables
-                g_mex_default_init(0);
-            }
-        }
-        for(idx = 0; g_variable[idx].name; idx++) {
-            // stricmp = case INSENSITIVE
-            // strcmp  = case SENSITIVE
-            if(g_insensitive) t = stricmp(g_variable[idx].name, name);
-            else              t = strcmp (g_variable[idx].name, name);
-            if(!t) {
-                if(add_varval(idx, val, val32, valsz) < 0) goto quit_error;
-                goto quit;
-            }
-        }
-        if(idx >= MAX_VARS) {
-            fprintf(stderr, "\nError: the script uses more variables (%"PRId") than supported\n", idx);
-            myexit(QUICKBMS_ERROR_BMS);
-        }
-
-
-        t = strlen(name);
-        if(g_force_cstring) {
-            t = cstring(name, name, -1, NULL);
-        }
-        if(t < 0) ALLOC_ERR;
-#ifdef QUICKBMS_VAR_STATIC
-        if(t <= VAR_NAMESZ) {
-            STR_MEMCPY(g_variable[idx].name_static, name, t + 1);
-            g_variable[idx].name = g_variable[idx].name_static;
-            g_variable[idx].size = VAR_NAMESZ;    // t
-        } else
-#endif
-        {
-            strdup_replace(&g_variable[idx].name_alloc, name, t, &g_variable[idx].size);
-            g_variable[idx].name = g_variable[idx].name_alloc;
-        }
-#ifdef QUICKBMS_VAR_STATIC
-        g_variable[idx].real_size = t;
-#endif
-
-
-        if(add_varval(idx, val, val32, valsz) < 0) goto quit_error;
-
-        if(!g_variable[idx].name[0]) {        // ""
-            g_variable[idx].constant = 1;     // it's like read-only
-        }
-
-        if(is_const) {
-            g_variable[idx].constant = 1;
-        } else {
-            // if this "if" is removed the tool will be a bit slower but will be able to handle completely the script in the example below
-            if(myisdigitstr(g_variable[idx].name)) {  // removes the problem of Log "123.txt" 0 0
-            //if(myisdigit(g_variable[idx].name[0])) {  // number: why only the first byte? because decimal and hex (0x) start all with a decimal number or a '-'
-                //strdup_replace(&g_variable[idx].value, g_variable[idx].name, -1, &g_variable[idx].size);
-                g_variable[idx].value32  = myatoi(g_variable[idx].name);
-                g_variable[idx].isnum    = 1;
-                g_variable[idx].constant = 1;     // it's like read-only
-
-                // there is only one incompatibility with the string-only variables, but it's acceptable for the moment:
-                //   set NAME string "mytest"
-                //   set NUM long 0x1234
-                //   string NAME += NUM
-                //   print "%NAME%"
-                //   set NUM string "0x12349999999999"
-                //   string NAME += NUM
-                //   print "%NAME%"
-            }
-        }
-
-        if(sub_var) {
-            g_variable[idx].sub_var = calloc(sizeof(sub_variable_t), 1);
-            if(!g_variable[idx].sub_var) STD_ERR(QUICKBMS_ERROR_MEMORY);
-            g_variable[idx].sub_var->var  = sub_var;
-            g_variable[idx].sub_var->vars = sub_vars;
-        }
-    }
-quit:
-    if(g_verbose > 0) {
-        if(g_variable[idx].isnum) {
-            printf("             >set %s (%"PRId") to 0x%"PRIx"\n", g_variable[idx].name, idx, g_variable[idx].value32);
-        } else if(g_variable[idx].value) {
-            printf("             >set %s (%"PRId") to \"%s\"\n", g_variable[idx].name, idx, g_variable[idx].value);
-        } else {
-            printf("             >set %s (%"PRId") to \"%s\"\n", g_variable[idx].name, idx, g_variable[idx].name);
-        }
-    /*} else if(g_verbose < 0) {
-        if(g_variable[idx].isnum) {
-            printf("             >%-10s 0x%"PRIx"\n", g_variable[idx].name, g_variable[idx].value32);
-        } else if(g_variable[idx].value) {
-            printf("             >%-10s \"%s\"\n", g_variable[idx].name, g_variable[idx].value);
-        } else {
-            printf("             >%-10s \"%s\"\n", g_variable[idx].name, g_variable[idx].name);
-        } */
-    }
-    return(idx);
-quit_error:
-    fprintf(stderr, "\nError: there is something wrong in the BMS script, please check it\n");
-    myexit(QUICKBMS_ERROR_BMS);
-    return -1;
-}
-
-
-
-#define add_var_const(A, B, C, D, E) \
-    add_var( \
-        ((g_lame_add_var_const_workaround = 1) & 0) + A, \
-        B, C, D, E)
-
-
-
 int *add_multi_dimensional(u8 *name, int *sub_vars) {
     int     ret = 0,
             op  = 0,
@@ -844,7 +800,10 @@ int *add_multi_dimensional(u8 *name, int *sub_vars) {
     if(!name) return NULL;
 
     for(s = name; *s; s++) {
-        if(*s == '[') op++;
+        if(*s == '[') {
+            if(s[1] == ']') return NULL;    // []
+            op++;
+        }
         if(*s == ']') {
             cl++;
             if(op != cl) return NULL;
@@ -892,6 +851,138 @@ int *add_multi_dimensional(u8 *name, int *sub_vars) {
 
 
 
+int add_var(int idx, u8 *name, u8 *val, int val32, int valsz) {
+    int     sub_vars    = 0,
+            *sub_var    = NULL,
+            t;
+
+    int     is_const    = g_lame_add_var_const_workaround;
+    g_lame_add_var_const_workaround = 0;
+
+
+    // do NOT touch valsz, it's a job of strdup_replace
+    var_check_idx(idx, __LINE__);
+    //if((valsz == -2) && !name) name = ""; // specific for the ARGs, only in case of errors in my programming
+    // if(valsz < 0) valsz = STRINGSZ;  do NOT do this, valsz is calculated on the length of val
+    if(!name) {  // && (idx >= 0)) {
+        //name = g_variable[idx].name; // unused
+        if(add_varval(idx, val, val32, valsz) < 0) goto quit_error;
+        //goto quit;
+    } else {    // used only when the bms file is parsed at the beginning
+        if(!stricmp(name, "EXTRCNT") || !stricmp(name, "BytesRead") || !stricmp(name, "NotEOF") || !stricmp(name, "SOF") || !stricmp(name, "EOF")) {
+            if(!g_mex_default) {
+                g_mex_default = 1;    // this avoids to waste cpu for these boring and useless variables
+                g_mex_default_init(0);
+            }
+        }
+        for(idx = 0; g_variable[idx].name; idx++) {
+            // stricmp = case INSENSITIVE
+            // strcmp  = case SENSITIVE
+            if(g_insensitive) t = stricmp(g_variable[idx].name, name);
+            else              t = strcmp (g_variable[idx].name, name);
+            if(!t) {
+                if(add_varval(idx, val, val32, valsz) < 0) goto quit_error;
+                goto quit;
+            }
+        }
+        if(idx >= MAX_VARS) {
+            fprintf(stderr, "\nError: the script uses more variables (%"PRId") than supported\n", idx);
+            myexit(QUICKBMS_ERROR_BMS);
+        }
+
+
+        t = strlen(name);
+        if(g_force_cstring) {
+            t = cstring(name, name, -1, NULL, NULL);
+        }
+        if(t < 0) ALLOC_ERR;
+#ifdef QUICKBMS_VAR_STATIC
+        if(t <= VAR_NAMESZ) {
+            STR_MEMCPY(g_variable[idx].name_static, name, t + 1);
+            g_variable[idx].name = g_variable[idx].name_static;
+            g_variable[idx].size = VAR_NAMESZ;    // t
+        } else
+#endif
+        {
+            strdup_replace(&g_variable[idx].name_alloc, name, t, &g_variable[idx].size);
+            g_variable[idx].name = g_variable[idx].name_alloc;
+        }
+#ifdef QUICKBMS_VAR_STATIC
+        g_variable[idx].real_size = t;
+#endif
+
+        if(add_varval(idx, val, val32, valsz) < 0) goto quit_error;
+
+        if(!g_variable[idx].name[0]) {        // ""
+            g_variable[idx].constant = 1;     // it's like read-only
+        }
+
+        if(is_const) {
+            g_variable[idx].constant = 1;
+        } else {
+            // if this "if" is removed the tool will be a bit slower but will be able to handle completely the script in the example below
+            if(myisdigitstr(g_variable[idx].name)) {  // removes the problem of Log "123.txt" 0 0
+            //if(myisdigit(g_variable[idx].name[0])) {  // number: why only the first byte? because decimal and hex (0x) start all with a decimal number or a '-'
+                //strdup_replace(&g_variable[idx].value, g_variable[idx].name, -1, &g_variable[idx].size);
+                g_variable[idx].value32  = myatoi(g_variable[idx].name);
+                g_variable[idx].isnum    = 1;
+                g_variable[idx].constant = 1;     // it's like read-only
+
+                // there is only one incompatibility with the string-only variables, but it's acceptable for the moment:
+                //   set NAME string "mytest"
+                //   set NUM long 0x1234
+                //   string NAME += NUM
+                //   print "%NAME%"
+                //   set NUM string "0x12349999999999"
+                //   string NAME += NUM
+                //   print "%NAME%"
+            }
+        }
+
+        if(!g_variable[idx].sub_var) {
+            sub_var = add_multi_dimensional(name, &sub_vars);
+            if(sub_var) {
+                g_variable[idx].sub_var = calloc(sizeof(sub_variable_t), 1);
+                if(!g_variable[idx].sub_var) STD_ERR(QUICKBMS_ERROR_MEMORY);
+                g_variable[idx].sub_var->var  = sub_var;
+                g_variable[idx].sub_var->vars = sub_vars;
+            }
+        }
+    }
+quit:
+    if(g_verbose > 0) {
+        if(g_variable[idx].isnum) {
+            printf("             >set %s (%"PRId") to 0x%"PRIx"\n", g_variable[idx].name, idx, g_variable[idx].value32);
+        } else if(g_variable[idx].value) {
+            printf("             >set %s (%"PRId") to \"%s\"\n", g_variable[idx].name, idx, g_variable[idx].value);
+        } else {
+            printf("             >set %s (%"PRId") to \"%s\"\n", g_variable[idx].name, idx, g_variable[idx].name);
+        }
+    /*} else if(g_verbose < 0) {
+        if(g_variable[idx].isnum) {
+            printf("             >%-10s 0x%"PRIx"\n", g_variable[idx].name, g_variable[idx].value32);
+        } else if(g_variable[idx].value) {
+            printf("             >%-10s \"%s\"\n", g_variable[idx].name, g_variable[idx].value);
+        } else {
+            printf("             >%-10s \"%s\"\n", g_variable[idx].name, g_variable[idx].name);
+        } */
+    }
+    return(idx);
+quit_error:
+    fprintf(stderr, "\nError: there is something wrong in the BMS script, please check it\n");
+    myexit(QUICKBMS_ERROR_BMS);
+    return -1;
+}
+
+
+
+#define add_var_const(A, B, C, D, E) \
+    add_var( \
+        ((g_lame_add_var_const_workaround = 1) & 0) + A, \
+        B, C, D, E)
+
+
+
 // this function is a partial work-around
 int quick_var_from_name_check(u8 **ret_key, int *ret_keysz) {
     int     keysz   = -1,
@@ -905,7 +996,7 @@ int quick_var_from_name_check(u8 **ret_key, int *ret_keysz) {
     key = *ret_key;
 
     // it's necessary to check the memory_file before the variable or it will not work
-    if(!strnicmp(key, MEMORY_FNAME, MEMORY_FNAMESZ)) {   // memory_file
+    if(is_MEMORY_FILE(key)) {   // memory_file
         idx   = -get_memory_file(key);
         keysz = g_memory_file[idx].size;
         key   = g_memory_file[idx].data;
@@ -967,6 +1058,129 @@ int verbose_print(int offset, u8 *cmd, int idx, u8 *str, i32 strsz, int num, i32
 
 
 
+g_debug_output_t *init_debug_output(u8 *fname) {
+    g_debug_output_t    *ret;
+
+    ret = calloc(1, sizeof(g_debug_output_t));
+    if(!ret) STD_ERR(QUICKBMS_ERROR_MEMORY);
+
+    ret->filename   = mystrdup_simple(fname);
+    ret->ext        = get_extension(ret->filename);
+    ret->level      = 0;
+
+         if(!stricmp(ret->ext, "json")) ret->format = DEBUG_OUTPUT_JSON;
+    else if(!stricmp(ret->ext, "csv" )) ret->format = DEBUG_OUTPUT_CSV;
+    else if(!stricmp(ret->ext, "yaml")) ret->format = DEBUG_OUTPUT_YAML;
+    else if(!stricmp(ret->ext, "xml" )) ret->format = DEBUG_OUTPUT_XML;
+    else if(!stricmp(ret->ext, "c"   )) ret->format = DEBUG_OUTPUT_C;
+    else if(!stricmp(ret->ext, "js"  )) ret->format = DEBUG_OUTPUT_C;
+    else if(!stricmp(ret->ext, "py"  )) ret->format = DEBUG_OUTPUT_C;
+    else if(!stricmp(ret->ext, "cpp" )) ret->format = DEBUG_OUTPUT_C;
+    else if(!stricmp(ret->ext, "java")) ret->format = DEBUG_OUTPUT_C;
+    else                                ret->format = DEBUG_OUTPUT_JSON;
+
+    if(check_overwrite(ret->filename, 0) < 0) {
+        FREE(ret)
+        return NULL;
+    }
+    ret->fd = xfopen(ret->filename, "wb");
+    if(!ret->fd) STD_ERR(QUICKBMS_ERROR_UNKNOWN);
+    setbuf(ret->fd, NULL);
+    return ret;
+}
+
+
+
+static void xdebug_print_tab(void) {
+    fprintf(g_debug_output->fd, "%*s", g_debug_output->level * 4, "");
+}
+
+
+
+// more: negative is number of bits, positive is the type
+int xdebug_print(int offset, u8 *cmd, int idx, u8 *str, i32 strsz, int num, i32 more) {
+    i32     len;
+    u8      *name;
+    u8      tmp[NUMBERSZ + 1];  // currently used only for bits
+
+    if(!g_debug_output) return -1;
+    if(!g_debug_output->fd) return -1;
+
+    name = get_varname(idx);
+    if(!strcmp(name, QUICKBMS_DUMMY)) return -1;   // no need of stricmp
+
+    // tabs
+        switch(g_debug_output->format) {
+            case DEBUG_OUTPUT_JSON:
+                xdebug_print_tab();
+                break;
+            default: break;
+        }
+
+    // { }
+    if(cmd) {
+        switch(g_debug_output->format) {
+            case DEBUG_OUTPUT_JSON:
+                fprintf(g_debug_output->fd, "%s\n", cmd);
+                break;
+            case DEBUG_OUTPUT_YAML:
+                fprintf(g_debug_output->fd, "%s\n", "---");
+                break;
+            case DEBUG_OUTPUT_C:
+                //fprintf(g_debug_output->fd, "%s\n", cmd);   // struct?
+                break;
+            default: break;
+        }
+        return 0;
+    }
+
+    tmp[0] = 0;
+    if(more < 0) sprintf(tmp, ":%d", -more);
+
+    if(str) {
+
+        len = strsz;
+        if(strsz < 0) len = strlen(str);
+        switch(g_debug_output->format) {
+            case DEBUG_OUTPUT_JSON:
+                fprintf(g_debug_output->fd, "\"%s%s\": \"%s\",\n", name, tmp, string_to_C(str, len, NULL, 0));
+                break;
+            case DEBUG_OUTPUT_CSV:
+                fprintf(g_debug_output->fd, "\"%s\",\n", string_to_C(str, len, NULL, 0));
+                break;
+            case DEBUG_OUTPUT_YAML:
+                fprintf(g_debug_output->fd, "%s%s: %s\n", name, tmp, string_to_C(str, len, NULL, 0));
+                break;
+            case DEBUG_OUTPUT_C:
+                fprintf(g_debug_output->fd, "%s %s%s[] = \"%s\";\n", (strsz < 0) ? "char" : "unsigned char", name, tmp, string_to_C(str, len, NULL, 0));
+                break;
+            default: break;
+        }
+
+    } else {
+
+        switch(g_debug_output->format) {
+            case DEBUG_OUTPUT_JSON:
+                fprintf(g_debug_output->fd, "\"%s%s\": %"PRId",\n", name, tmp, num);
+                break;
+            case DEBUG_OUTPUT_CSV:
+                fprintf(g_debug_output->fd, "%"PRId",\n", num);
+                break;
+            case DEBUG_OUTPUT_YAML:
+                fprintf(g_debug_output->fd, "%s%s: %"PRId"\n", name, tmp, num);
+                break;
+            case DEBUG_OUTPUT_C:
+                fprintf(g_debug_output->fd, "%s %s%s = %"PRId";\n", datatype_to_string(more), name, tmp, num);
+                break;
+            default: break;
+        }
+
+    }
+    return 0;
+}
+
+
+
 // useless, added only to avoid this bug: set VAR string "" ; putvarchr VAR 0xa00 0
 void *variable_alloc(variable_t *output, int size) {
 #ifdef QUICKBMS_VAR_STATIC
@@ -1005,16 +1219,49 @@ void DIRECT_ADDVAR(variable_t *output, u8 *value, int size) {
 
 
 
+void FREE_SUB_VAR(variable_t *X) {
+    int     i;
+
+    if(!X) return;
+    if(X->sub_var) {
+        FREE(X->sub_var->var)
+        for(i = 0; i < X->sub_var->arrays; i++) {
+            FREE(X->sub_var->array[i].info)
+            FREE(X->sub_var->array[i].data)
+        }
+        FREE(X->sub_var->array)
+        FREE(X->sub_var)
+    }
+    //memset(X, 0, sizeof(variable_t)); // not needed
+}
+
+
+
+void FREE_VAR(variable_t *X) {
+    int     i;
+
+    if(!X) return;
+    X->name  = NULL;
+    X->value = NULL;
+    FREE(X->name_alloc)
+    FREE(X->value_alloc)
+    FREE_SUB_VAR(X);
+    //memset(X, 0, sizeof(variable_t)); // not needed
+}
+
+
+
 void variable_copy(variable_t *output, variable_t *input, int keep_content) {
     int     i;
     u8      *name_alloc                     = NULL,
-#ifdef QUICKBMS_VAR_STATIC
-            *name                           = NULL,
-            name_static[VAR_NAMESZ + 1]     = "",
-            *value                          = NULL,
-            value_static[VAR_VALUESZ + 1]   = "",
-#endif
             *value_alloc                    = NULL;
+#ifdef QUICKBMS_VAR_STATIC
+    u8      *name                           = NULL,
+            *value                          = NULL;
+    static  // not thread-safe but this is just a temporary buffer
+        u8  name_static [VAR_NAMESZ + 1]    = "",   // it's also possible
+            value_static[VAR_VALUESZ + 1]   = "";   // to avoid to use them
+#endif
 
     if(!output || !input) return;
 
@@ -1136,12 +1383,21 @@ void variable_copy(variable_t *output, variable_t *input, int keep_content) {
     }
 
     if(input->sub_var) {
-        output->sub_var        = malloc_copy(keep_content ? output->sub_var        : NULL, input->sub_var,        sizeof(sub_variable_t));
-        output->sub_var->var   = malloc_copy(keep_content ? output->sub_var->var   : NULL, input->sub_var->var,   input->sub_var->vars * sizeof(int));
-        output->sub_var->array = malloc_copy(keep_content ? output->sub_var->array : NULL, input->sub_var->array, input->sub_var->arrays * sizeof(data_t));
+        if(!keep_content) { // this is NOT a free, it will keep a backup
+            for(i = 0; i < input->sub_var->arrays; i++) {
+                output->sub_var->array[i].info = NULL;
+                output->sub_var->array[i].data = NULL;
+            }
+            output->sub_var->var    = NULL;
+            output->sub_var->array  = NULL;
+            output->sub_var         = NULL;
+        }
+        malloc_copy((void **)&output->sub_var,        input->sub_var,        sizeof(sub_variable_t));
+        malloc_copy((void **)&output->sub_var->var,   input->sub_var->var,   input->sub_var->vars * sizeof(int));
+        malloc_copy((void **)&output->sub_var->array, input->sub_var->array, input->sub_var->arrays * sizeof(data_t));
         for(i = 0; i < input->sub_var->arrays; i++) {
-            output->sub_var->array[i].info = malloc_copy(keep_content ? output->sub_var->array[i].info : NULL, input->sub_var->array[i].info, input->sub_var->vars * sizeof(int));
-            output->sub_var->array[i].data = malloc_copy(keep_content ? output->sub_var->array[i].data : NULL, input->sub_var->array[i].data, input->sub_var->array[i].size);
+            malloc_copy((void **)&output->sub_var->array[i].info, input->sub_var->array[i].info, input->sub_var->vars * sizeof(int));
+            malloc_copy((void **)&output->sub_var->array[i].data, input->sub_var->array[i].data, input->sub_var->array[i].size);
         }
     }
 
@@ -1149,24 +1405,4 @@ void variable_copy(variable_t *output, variable_t *input, int keep_content) {
 }
 
 
-
-void FREE_VAR(variable_t *X) {
-    int     i;
-
-    if(!X) return;
-    X->name  = NULL;
-    X->value = NULL;
-    FREE(X->name_alloc)
-    FREE(X->value_alloc)
-    if(X->sub_var) {
-        FREE(X->sub_var->var)
-        for(i = 0; i < X->sub_var->arrays; i++) {
-            FREE(X->sub_var->array[i].info)
-            FREE(X->sub_var->array[i].data)
-        }
-        FREE(X->sub_var->array)
-        FREE(X->sub_var)
-    }
-    //memset(X, 0, sizeof(variable_t)); // not needed
-}
 

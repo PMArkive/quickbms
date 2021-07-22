@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2019 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -56,6 +56,7 @@ u8 *string_to_execute(u8 *str, u8 *INPUT, u8 *INPUT_SIZE, u8 *OUTPUT, u8 *OUTPUT
     if(!exe) STD_ERR(QUICKBMS_ERROR_MEMORY);
     exe[0] = 0;
     limit = str + strlen(str);
+
     for(p = str; *p && (p < limit);) {
         if((p[0] == '>') || (p[0] == '<')) {
             if(res) *res |= string_to_execute_REDIRECT;
@@ -152,7 +153,7 @@ u8 *quickbms_execute_pipe_path(u8 *mycmd) {
     } else {
         new_exe = quickbms_path_open(old_exe);
         if(new_exe) {
-            if(mystrchrs(new_exe, " \t")) quote = 1;
+            if(need_quote_delimiters(new_exe)) quote = 1;
             tmp = l - mycmd;
             len = strlen(l);
             new_exelen = strlen(new_exe);
@@ -282,9 +283,9 @@ int quickbms_execute_pipe(u8 *cmdstr, u8 *in, int insz, u8 **out, int outsz, u8 
 
 quit:
     if(!my_fname) {
-        unlink(in_fname);
+        /*if(!g_keep_temporary_file)*/ unlink(in_fname);
         FREE(in_fname)
-        unlink(out_fname);
+        /*if(!g_keep_temporary_file)*/ unlink(out_fname);
         FREE(out_fname)
     }
     return size;
@@ -350,7 +351,6 @@ ICE_KEY *do_ice_key(u8 *key, int keysz, int icecrypt) {
     int     i       = 0,
             k,
             level   = 0;
-    u8      buf[1024];
 
     if(keysz == 8) {
         level = 0;
@@ -362,7 +362,8 @@ ICE_KEY *do_ice_key(u8 *key, int keysz, int icecrypt) {
     }
 
     if(icecrypt) {
-        memset(buf, 0, sizeof(buf));
+        u8      *buf = alloca(keysz + 1);
+        memset(buf, 0, keysz + 1);
         for(k = 0; k < keysz; k++) {
             u8      c = key[k] & 0x7f;
             int     idx = i / 8;
@@ -546,7 +547,7 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
         u8      *type;
     } quickbms_tomcrypt_t;
     static int                  quickbms_tomcrypts = 0;
-    static quickbms_tomcrypt_t  quickbms_tomcrypt[64];
+    static quickbms_tomcrypt_t  quickbms_tomcrypt[128];
 
     if(!init) {
         register_all_ciphers();
@@ -596,25 +597,25 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
 
     TOMCRYPT_REGISTER(hash, chc, NULL)
     TOMCRYPT_REGISTER(hash, whirlpool, NULL)
-    TOMCRYPT_REGISTER(hash, sha3_512, "sha3_512")
-    TOMCRYPT_REGISTER(hash, sha3_384, "sha3_384")
-    TOMCRYPT_REGISTER(hash, sha3_256, "sha3_256")
-    TOMCRYPT_REGISTER(hash, sha3_224, "sha3_224")
+    TOMCRYPT_REGISTER(hash, sha3_512, "sha3-512")
+    TOMCRYPT_REGISTER(hash, sha3_384, "sha3-384")
+    TOMCRYPT_REGISTER(hash, sha3_256, "sha3-256")
+    TOMCRYPT_REGISTER(hash, sha3_224, "sha3-224")
     TOMCRYPT_REGISTER(hash, sha512, NULL)
     TOMCRYPT_REGISTER(hash, sha384, NULL)
-    TOMCRYPT_REGISTER(hash, sha512_256, "sha512_256")
-    TOMCRYPT_REGISTER(hash, sha512_224, "sha512_224")
+    TOMCRYPT_REGISTER(hash, sha512_256, "sha512-256")
+    TOMCRYPT_REGISTER(hash, sha512_224, "sha512-224")
     TOMCRYPT_REGISTER(hash, sha256, NULL)
     TOMCRYPT_REGISTER(hash, sha224, NULL)
     TOMCRYPT_REGISTER(hash, sha1, NULL)
-    TOMCRYPT_REGISTER(hash, blake2s_256, "blake2s_256")
-    TOMCRYPT_REGISTER(hash, blake2s_224, "blake2s_224")
-    TOMCRYPT_REGISTER(hash, blake2s_160, "blake2s_160")
-    TOMCRYPT_REGISTER(hash, blake2s_128, "blake2s_128")
-    TOMCRYPT_REGISTER(hash, blake2b_512, "blake2b_512")
-    TOMCRYPT_REGISTER(hash, blake2b_384, "blake2b_384")
-    TOMCRYPT_REGISTER(hash, blake2b_256, "blake2b_256")
-    TOMCRYPT_REGISTER(hash, blake2b_160, "blake2b_160")
+    TOMCRYPT_REGISTER(hash, blake2s_256, "blake2s-256")
+    TOMCRYPT_REGISTER(hash, blake2s_224, "blake2s-224")
+    TOMCRYPT_REGISTER(hash, blake2s_160, "blake2s-160")
+    TOMCRYPT_REGISTER(hash, blake2s_128, "blake2s-128")
+    TOMCRYPT_REGISTER(hash, blake2b_512, "blake2b-512")
+    TOMCRYPT_REGISTER(hash, blake2b_384, "blake2b-384")
+    TOMCRYPT_REGISTER(hash, blake2b_256, "blake2b-256")
+    TOMCRYPT_REGISTER(hash, blake2b_160, "blake2b-160")
     TOMCRYPT_REGISTER(hash, md5, NULL)
     TOMCRYPT_REGISTER(hash, md4, NULL)
     TOMCRYPT_REGISTER(hash, md2, NULL)
@@ -715,6 +716,8 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
         }
         return(ctx);
     }
+
+    if(!out) return ctx;
 
     //if(outsz > insz) outsz = insz;
     tmp = outsz;
@@ -949,18 +952,18 @@ quit:
 // original Java code by Spirolone
 // http://www.slightlymagic.net/forum/viewtopic.php?f=117&t=14839&start=135#p180107
 int modpow_zed(unsigned char *content, int content_length) {
-    inline void System_arraycopy(unsigned char *src, int srcPos, unsigned char *dest, int destPos, int length) {
+    #define modpow_zed_System_arraycopy(src, srcPos, dest, destPos, length) \
         memcpy(dest + destPos, src + srcPos, length);
-    }
+
     int     i;
     unsigned char result[256] = "";
     memset(result, 0, sizeof(result));
     if (content_length == 256)
-        System_arraycopy(content, 0, result, 0, content_length); //result = content;
+        modpow_zed_System_arraycopy(content, 0, result, 0, content_length) //result = content;
     else if (content_length > 256)
-        System_arraycopy(content, 1, result, 0, 256);
+        modpow_zed_System_arraycopy(content, 1, result, 0, 256)
     else if (content_length < 256)
-        System_arraycopy(content, 0, result, 256-content_length, content_length);
+        modpow_zed_System_arraycopy(content, 0, result, 256-content_length, content_length)
     unsigned char m[24] = "";
     for (i=0; i<20; i++)
         m[i] = result[235+i];
@@ -980,22 +983,24 @@ int modpow_zed(unsigned char *content, int content_length) {
     while (result[zeroes]==0)
         zeroes++;
     int decoded_length = 214-zeroes;
-    System_arraycopy(result, zeroes+1, content, 0, decoded_length);
+    modpow_zed_System_arraycopy(result, zeroes+1, content, 0, decoded_length)
     return decoded_length;
 }
 #endif
 
 
 
-void DO_QUICKBMS_HASH(u8 *INPUT, int INPUT_SIZE) {
+void *DO_QUICKBMS_HASH(u8 *INPUT, int INPUT_SIZE) {
+    static u8   OUTPUT[(256 * 2) + 1];
     int     OUTPUT_SIZE = INPUT_SIZE * 2;
-    u8      OUTPUT[OUTPUT_SIZE + 1];
+    if(OUTPUT_SIZE >= sizeof(OUTPUT)) STD_ERR(QUICKBMS_ERROR_MEMORY);
 
     add_var(0, "QUICKBMS_HASH", INPUT, 0, INPUT_SIZE);
     byte2hex(INPUT, INPUT_SIZE, OUTPUT, sizeof(OUTPUT), 1);
     add_var(0, "QUICKBMS_HEXHASH", OUTPUT, 0, -1);
     mytolower(OUTPUT);
     add_var(0, "QUICKBMS_HEXHASHL", OUTPUT, 0, -1);
+    return OUTPUT;
 }
 
 
@@ -1029,6 +1034,32 @@ int do_quickbms_hmac(u8 *data, int datalen, u8 *digest) {
 
 
 
+#ifndef DISABLE_SSL
+// Gladman
+static void fcrypt_encr_data(unsigned char *data, int d_len, aes_ctr_ctx_t *cx)
+{   int i = 0, pos = cx->num;
+
+    while(i < d_len)
+    {
+        if(pos == AES_BLOCK_SIZE)
+        {   int j = 0;
+            /* increment encryption nonce   */
+            while(j < 8 && !++cx->ivec[j])
+                ++j;
+            /* encrypt the nonce to form next xor buffer    */
+            AES_encrypt(cx->ivec, cx->ecount, &cx->ctx);
+            pos = 0;
+        }
+
+        data[i++] ^= cx->ecount[pos++];
+    }
+
+    cx->num = pos;
+}
+#endif
+
+
+
 // if datalen is negative then it will return 0 if encryption is enabled or -1 if disabled
 int perform_encryption(u8 *data, int datalen) {
 
@@ -1058,29 +1089,6 @@ int perform_encryption(u8 *data, int datalen) {
 
 #ifndef DISABLE_SSL
     } else QUICK_CRYPT_CASE(zip_aes_ctx)    // before evpmd_ctx, just in case of future updates
-
-        // Gladman
-        void fcrypt_encr_data(unsigned char *data, int d_len, aes_ctr_ctx_t *cx)
-        {   int i = 0, pos = cx->num;
-
-            while(i < d_len)
-            {
-                if(pos == AES_BLOCK_SIZE)
-                {   int j = 0;
-                    /* increment encryption nonce   */
-                    while(j < 8 && !++cx->ivec[j])
-                        ++j;
-                    /* encrypt the nonce to form next xor buffer    */
-                    AES_encrypt(cx->ivec, cx->ecount, &cx->ctx);
-                    pos = 0;
-                }
-
-                data[i++] ^= cx->ecount[pos++];
-            }
-
-            cx->num = pos;
-        }
-
         if(!g_encrypt_mode) {
             do_quickbms_hmac(data, datalen, digest);
             fcrypt_encr_data(data, datalen, zip_aes_ctx);
@@ -1449,7 +1457,7 @@ int perform_encryption(u8 *data, int datalen) {
         hsel_crypt(NULL, data, datalen, g_encrypt_mode, NULL);
 
     } else QUICK_CRYPT_CASE(rng_ctx)
-        rng_crypt(data, datalen, 0);
+        rng_crypt(data, datalen);
 
     } else QUICK_CRYPT_CASE(flip_ctx)
         flip_crypt(flip_ctx, data, datalen);
@@ -1461,7 +1469,7 @@ int perform_encryption(u8 *data, int datalen) {
         molebox_decrypt(molebox_ctx, data, datalen);
 
     } else QUICK_CRYPT_CASE(replace_ctx)
-        replace_crypt(replace_ctx, data, datalen, g_encrypt_mode);
+        datalen = replace_crypt(replace_ctx, data, datalen);
 
     } else QUICK_CRYPT_CASE(rc4_ctx)
         arc4_crypt(rc4_ctx, data, datalen);
@@ -1471,6 +1479,101 @@ int perform_encryption(u8 *data, int datalen) {
 
     } else QUICK_CRYPT_CASE(chacha_ctx)
         chacha20_encrypt(chacha_ctx, data, data, datalen);  // encrypt and decrypt are the same
+
+    } else QUICK_CRYPT_CASE(spookyhash_ctx)
+        u64     spookyhash1 = spookyhash_ctx->hash1,
+                spookyhash2 = spookyhash_ctx->hash2;
+        switch(spookyhash_ctx->size) {
+            case 32:
+                spookyhash1 = (u32)spookyhash_32(data, datalen, spookyhash1);
+                memcpy(digest,               &spookyhash1, sizeof(u64));
+                break;
+            case 64:
+                spookyhash1 =      spookyhash_64(data, datalen, spookyhash1);
+                memcpy(digest,               &spookyhash1, sizeof(u64));
+                break;
+            default:
+                                   spookyhash_128(data, datalen, &spookyhash1, &spookyhash2);
+                dump128num(digest, spookyhash1, spookyhash2);
+                break;
+        }
+        add_var(0, "QUICKBMS_CRC", NULL, spookyhash1, sizeof(u_int));   // useless for 128
+        tmp = spookyhash_ctx->size / 8;
+        DO_QUICKBMS_HASH(digest, tmp);
+
+    } else QUICK_CRYPT_CASE(murmurhash_ctx)
+        switch(murmurhash_ctx) {
+            case -32:
+                crc = qhashfnv1_32(data, datalen);
+                add_var(0, "QUICKBMS_CRC", NULL, crc, sizeof(u_int));
+                break;
+            case -64:
+                crc = qhashfnv1_64(data, datalen);
+                add_var(0, "QUICKBMS_CRC", NULL, crc, sizeof(u_int));
+                break;
+            case 32:
+                crc = qhashmurmur3_32(data, datalen);
+                add_var(0, "QUICKBMS_CRC", NULL, crc, sizeof(u_int));
+                break;
+            default:
+                qhashmurmur3_128(data, datalen, digest);
+                DO_QUICKBMS_HASH(digest, 16);
+                break;
+        }
+
+    } else QUICK_CRYPT_CASE(xxhash_ctx)
+        XXH128_hash_t    xxh128 = {0};
+        switch(xxhash_ctx->size) {
+            case -32:
+            case 32:
+                crc = XXH32(data, datalen, xxhash_ctx->hash1);
+                add_var(0, "QUICKBMS_CRC", NULL, crc, sizeof(u_int));
+                break;
+            case -64:
+                crc = XXH3_64bits_withSecret(data, datalen, xxhash_ctx->key, xxhash_ctx->keysz);
+                add_var(0, "QUICKBMS_CRC", NULL, crc, sizeof(u_int));
+                break;
+            case -128:
+                xxh128 = XXH3_128bits_withSecret(data, datalen, xxhash_ctx->key, xxhash_ctx->keysz);
+                dump128num(digest, xxh128.low64, xxh128.high64);
+                DO_QUICKBMS_HASH(digest, 16);
+                break;
+            case 128:
+                if(xxhash_ctx->keysz > 0) {
+                    xxh128 = XXH3_128bits_withSecret(data, datalen, xxhash_ctx->key, xxhash_ctx->keysz);
+                } else {
+                    xxh128 = XXH128(data, datalen, xxhash_ctx->hash1);
+                }
+                dump128num(digest, xxh128.low64, xxh128.high64);
+                DO_QUICKBMS_HASH(digest, 16);
+                break;
+            default: //case 64:
+                if(xxhash_ctx->keysz > 0) {
+                    crc = XXH3_64bits_withSecret(data, datalen, xxhash_ctx->key, xxhash_ctx->keysz);
+                } else {
+                    crc = XXH64(data, datalen, xxhash_ctx->hash1);
+                }
+                add_var(0, "QUICKBMS_CRC", NULL, crc, sizeof(u_int));
+                break;
+        }
+
+#ifndef DISABLE_TOMCRYPT
+#ifdef LTC_PKCS_5
+    } else QUICK_CRYPT_CASE(PBKDF_ctx)
+        unsigned long   tlong = datalen;
+        if(PBKDF_ctx->algo == 2) {
+                tmp = pkcs_5_alg2        (PBKDF_ctx->key, PBKDF_ctx->keysz, PBKDF_ctx->ivec, PBKDF_ctx->ivecsz, PBKDF_ctx->iter, PBKDF_ctx->hash, data, &tlong);
+        } else {
+            if(PBKDF_ctx->openssl) {
+                tmp = pkcs_5_alg1_openssl(PBKDF_ctx->key, PBKDF_ctx->keysz, PBKDF_ctx->ivec,                    PBKDF_ctx->iter, PBKDF_ctx->hash, data, &tlong);
+            } else {
+                tmp = pkcs_5_alg1        (PBKDF_ctx->key, PBKDF_ctx->keysz, PBKDF_ctx->ivec,                    PBKDF_ctx->iter, PBKDF_ctx->hash, data, &tlong);
+            }
+        }
+        if(tmp != CRYPT_OK) return -1;
+        datalen = tlong;
+#endif
+#endif
 
     } else {
         if(datalen < 0) return -1;
@@ -1491,6 +1594,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             tmp6,
             old_outsize,
             bck_size;
+    size_t  t_size;
     i32     t32 = 0,
             tt32;
     u8      *out,
@@ -1632,7 +1736,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         // it's a zlib with the adding of inflateBack9 which is not default
         QUICK_COMP_CASE(DEFLATE64) size = inflate64(in, zsize, out, size);
         QUICK_COMP_CASE(SHRINK) size = unshrink(in, zsize, out, size);
-        QUICK_COMP_CASE(PPMDI) size = unppmdi(in, zsize, out, size); // PKWARE specifics
+        QUICK_COMP_CASE(PPMDI) size = ppmdi_decompress /*unppmdi*/ (in, zsize, out, size); // PKWARE specifics
         QUICK_COMP_CASE(MULTIBASE)
             size = multi_base_decoder(  // the usage of g_comtype_dictionary_len avoids wasting 2 vars
                 g_comtype_dictionary_len & 0xff, (g_comtype_dictionary_len >> 8) & 0xff,
@@ -1714,7 +1818,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             } else {
                 size = -1;
             }
-        QUICK_COMP_CASE(SZIP) t32 = size; SZ_BufftoBuffDecompress(out, &t32, in, zsize, NULL); size = t32;
+        QUICK_COMP_CASE(SZIP) t_size = size; SZ_BufftoBuffDecompress(out, &t_size, in, zsize, NULL); size = t_size;
         QUICK_COMP_CASE(PPMDI_RAW)
             if(!g_comtype_dictionary) {
                 g_comtype_dictionary = "10 4 0"; // for the comtype scanner
@@ -1725,7 +1829,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             }
             tmp1 = tmp2 = tmp3 = 0;
             get_parameter_numbers(g_comtype_dictionary, &tmp1, &tmp2, &tmp3, NULL);
-            size = unppmdi_raw(in, zsize, out, size, tmp1, tmp2, tmp3);
+            size = ppmdi_decompress_raw /*unppmdi_raw*/ (in, zsize, out, size, tmp1, tmp2, tmp3);
         QUICK_COMP_CASE(PPMDG) size = unppmdg(in, zsize, out, size);
         QUICK_COMP_CASE(PPMDG_RAW)
             if(!g_comtype_dictionary) {
@@ -1838,13 +1942,13 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(YAZ0) size = decodeYaz0(in, zsize, out, size);
         QUICK_COMP_CASE(BYTE2HEX) size = byte2hex(in, zsize, out, size, 1);
         QUICK_COMP_CASE(UN434A) un434a_init(); size = un434a(in, out);
-        QUICK_COMP_CASE(UNZIP_DYNAMIC) t32 = *outsize; size = unzip_dynamic(in, zsize, &out, &t32, 0); *outsize = t32;
+        QUICK_COMP_CASE(UNZIP_DYNAMIC)   t32 = *outsize; size = unzip_dynamic(in, zsize, &out, &t32,   0); *outsize = t32;
         QUICK_COMP_CASE(GZPACK) size = gz_unpack(in, zsize, out, size);
-        //QUICK_COMP_CASE(ZLIB_NOERROR)    size = unzip_zlib(in, zsize, out, size, 1);
+        //QUICK_COMP_CASE(ZLIB_NOERROR)    size = unzip_zlib   (in, zsize, out, size, 1);
         //QUICK_COMP_CASE(DEFLATE_NOERROR) size = unzip_deflate(in, zsize, out, size, 1);
         QUICK_COMP_CASE(ZLIB_NOERROR)    t32 = *outsize; size = unzip_dynamic(in, zsize, &out, &t32,  15); *outsize = t32;
         QUICK_COMP_CASE(DEFLATE_NOERROR) t32 = *outsize; size = unzip_dynamic(in, zsize, &out, &t32, -15); *outsize = t32;
-        QUICK_COMP_CASE(PPMDH) size = unppmdh(in, zsize, out, size);
+        QUICK_COMP_CASE(PPMDH) size = ppmdh_decompress /*unppmdh*/ (in, zsize, out, size);
         QUICK_COMP_CASE(PPMDH_RAW)
             if(!g_comtype_dictionary) {
                 g_comtype_dictionary = "10 4"; // for the comtype scanner
@@ -1855,7 +1959,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             }
             tmp1 = tmp2 = 0;
             get_parameter_numbers(g_comtype_dictionary, &tmp1, &tmp2, NULL);
-            size = unppmdh_raw(in, zsize, out, size, tmp1, tmp2);
+            size = ppmdh_decompress_raw /*unppmdh_raw*/ (in, zsize, out, size, tmp1, tmp2);
         QUICK_COMP_CASE(RNC)  t32 = *outsize; size = my_rnc_decompress(in, zsize, &out, &t32, size); *outsize = t32; //_rnc_unpack(in, zsize, out, 0);
         QUICK_COMP_CASE(RNCb) size = rnc_unpack(in, out, NULL, -1, -1);
         QUICK_COMP_CASE(RNCb_RAW) size = rnc_unpack(in, out, NULL, zsize, size);
@@ -1868,7 +1972,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
                     "Error: the PAK_explode decompression requires the setting of the dictionary\n"
                     "       field in comtype specifying info5 (%s), like:\n"
                     "         get info5 byte\n"
-                    "         comtype ppmdh_raw info5\n", g_comtype_dictionary);
+                    "         comtype pak_explode info5\n", g_comtype_dictionary);
             }
             tmp1 = 0;
             get_parameter_numbers(g_comtype_dictionary, &tmp1, NULL);
@@ -1946,18 +2050,18 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(XU4_RLE) size = xu4_rleDecompress(in, zsize, out, size);
         QUICK_COMP_CASE(RVL) size = RVLCompress_decompress_ints(in, (void *)out, zsize);
         QUICK_COMP_CASE(LZFU)
-            t32 = size; // unused
-            p = pst_lzfu_decompress(in, zsize, &t32, 1);
-            size = t32;
+            t_size = size; // unused
+            p = pst_lzfu_decompress(in, zsize, &t_size, 1);
+            size = t_size;
             if(p) {
                 myalloc(&out, size, outsize);
                 memcpy(out, p, size);
                 FREE(p);
             }
         QUICK_COMP_CASE(LZFU_RAW)
-            t32 = size; // unused
-            p = pst_lzfu_decompress(in, zsize, &t32, 0);
-            size = t32;
+            t_size = size; // unused
+            p = pst_lzfu_decompress(in, zsize, &t_size, 0);
+            size = t_size;
             if(p) {
                 myalloc(&out, size, outsize);
                 memcpy(out, p, size);
@@ -1996,7 +2100,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(RTL_XPRESS) size = rtldecompress(RTL_COMPRESSION_FORMAT_XPRESS, in, zsize, out ,size);
         QUICK_COMP_CASE(RTL_XPRESS_HUFF) size = rtldecompress(RTL_COMPRESSION_FORMAT_XPRESS_HUFF, in, zsize, out ,size);
         QUICK_COMP_CASE(PRS) size = prs_decompress(in, out);
-        QUICK_COMP_CASE(SEGA_LZ77) size = sega_lz77(in, zsize, out);
+        QUICK_COMP_CASE(SEGA_LZ77) size = sega_lz77(in, zsize, out, 0);
         QUICK_COMP_CASE(SAINT_SEYA) size = Model_GMI_Decompress(in, zsize, out, size);
         QUICK_COMP_CASE(NTCOMPRESS30) size = ntcompress_30(in, zsize, out);
         QUICK_COMP_CASE(NTCOMPRESS40) size = ntcompress_40(in, zsize, out);
@@ -2355,9 +2459,9 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             density_res = density_decompress(in, zsize, out, size);
             size = density_res.bytesWritten;
         QUICK_COMP_CASE(BROTLI)
-            t32 = size;
-            if(BrotliDecoderDecompress(zsize, in, &t32, out) != BROTLI_DECODER_RESULT_SUCCESS) size = -1;
-            else size = t32;
+            t_size = size;
+            if(BrotliDecoderDecompress(zsize, in, &t_size, out) != BROTLI_DECODER_RESULT_SUCCESS) size = -1;
+            else size = t_size;
         QUICK_COMP_CASE(RLE32) size = rle32_decode(in, zsize, out);
         QUICK_COMP_CASE(RLE35) size = rle35_decode(in, zsize, out);
         QUICK_COMP_CASE(BSC)
@@ -2382,15 +2486,15 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
                 size = -1;
             }
         QUICK_COMP_CASE(FASTARI)
-            t32 = size;
-            fa_decompress(in, out, zsize, &t32);
-            size = t32;
+            t_size = size;
+            fa_decompress(in, out, zsize, &t_size);
+            size = t_size;
         QUICK_COMP_CASE(RLE_ORCOM) size = rle_orcom(in, zsize, out);
         QUICK_COMP_CASE(DICKY)
             p = NULL;
-            t32 = 0;
-            if(!dicky_uncompress((char**)&p, &t32, in, zsize)) {
-                size = t32;
+            t_size = 0;
+            if(!dicky_uncompress((char**)&p, &t_size, in, zsize)) {
+                size = t_size;
                 myalloc(&out, size, outsize);
                 memcpy(out, p, size);
             } else {
@@ -2399,25 +2503,23 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             dicky_free(p);
         QUICK_COMP_CASE(SQUISH) size = squish_unpack(in, zsize, out, size);
         QUICK_COMP_CASE(LZNT1)
-            t32 = size;
-            if(lznt1_decompress(in, zsize, out, &t32) < 0) size = t32;
+            t_size = size;
+            if(lznt1_decompress(in, zsize, out, &t_size) < 0) size = t_size;
             size = -1;
         QUICK_COMP_CASE(XPRESS)
-            t32 = size;
-            if(xpress_decompress(in, zsize, out, &t32) < 0) size = t32;
+            t_size = size;
+            if(xpress_decompress(in, zsize, out, &t_size) < 0) size = t_size;
             size = -1;
         QUICK_COMP_CASE(XPRESS_HUFF)
-            t32 = size;
-            if(xpress_huff_decompress(in, zsize, out, &t32) < 0) size = t32;
+            t_size = size;
+            if(xpress_huff_decompress(in, zsize, out, &t_size) < 0) size = t_size;
             size = -1;
         QUICK_COMP_CASE(LZJODY) size = lzjody_decompress(in, out, zsize, 0);
         QUICK_COMP_CASE(LZHL)
             p = lzhlight_initDecomp();
             size = lzhlight_decompress(p, in, zsize, out, size);
             lzhlight_delDecomp(p);
-        QUICK_COMP_CASE(NEPTUNIA)
-            neptunia_init();
-            if(!neptunia(in, out)) size = -1;
+        QUICK_COMP_CASE(NEPTUNIA) size = neptunia(in, zsize, out, size);
         QUICK_COMP_CASE(TRLE) size = trled(in, zsize, out, size);
         QUICK_COMP_CASE(SRLE) size = srled(in, zsize, out, size);
         QUICK_COMP_CASE(MRLE) size = mrled(in, out, size);
@@ -2759,6 +2861,108 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(MPPC_BIG)   size = mppc_unpack(in, zsize, out, size, 1);
         QUICK_COMP_CASE(ALZSS) size = ALLZ_Decode(&out /*don't worry, doesn't get modified*/, in, zsize);
         QUICK_COMP_CASE(CLZ) size = CLZ__unpack(in, zsize, out);
+        QUICK_COMP_CASE(GTC) size = ungtc(in, out);
+        QUICK_COMP_CASE(ANCO)  size = anco_unpack (in, zsize, out, size);
+        QUICK_COMP_CASE(ANCO0) size = anco_unpack0(in, zsize, out, size);
+        QUICK_COMP_CASE(ANCO1) size = anco_unpack1(in, zsize, out, size, 1);
+        QUICK_COMP_CASE(ANCO2) size = anco_unpack2(in, zsize, out, size, 1);
+        QUICK_COMP_CASE(ANCO3) size = anco_unpack3(in, zsize, out, size);
+        QUICK_COMP_CASE(ANCO4) size = anco_unpack4(in, zsize, out, size);
+        QUICK_COMP_CASE(ANCO5) size = anco_unpack5(in, zsize, out, size);
+        QUICK_COMP_CASE(konami_lz77) size = konami_lz77_decompress(in, zsize, out);
+        QUICK_COMP_CASE(vct_lzs) size = vct_lzs_unpack(in, zsize, out, size);
+        QUICK_COMP_CASE(umesoft) size = umesoft_unpack(in, out, size);
+        QUICK_COMP_CASE(systemaqua_catf) size = systemaqua_catf_unpack(in, out, size);
+        QUICK_COMP_CASE(sogna) size = sogna_unpack(in, out, size);
+        QUICK_COMP_CASE(pac_ads) size = pac_ads_unpack(in, out, size);
+        QUICK_COMP_CASE(ail_lzs) size = ail_lzs_unpack(in, out, size);
+        QUICK_COMP_CASE(agsi) size = agsi_unpack(in, out, size);
+        QUICK_COMP_CASE(foster_fa2) size = foster_fa2_unpack(in, out, size);
+        QUICK_COMP_CASE(an21) size = an21_unpack(in, out, size, g_comtype_dictionary ? myatoi(g_comtype_dictionary) : -1);
+        QUICK_COMP_CASE(arc_link) size = arc_link_unpack(in, out, size, g_comtype_dictionary ? myatoi(g_comtype_dictionary) : -1);
+        QUICK_COMP_CASE(maika_bk) size = maika_bk_unpack(in, out, size);
+        QUICK_COMP_CASE(maika_mk2) size = maika_mk2_unpack(in, out, size, g_comtype_dictionary ? myatoi(g_comtype_dictionary) : -1);
+        QUICK_COMP_CASE(propeller_mgr) size = propeller_mgr_unpack(in, out, size);
+        QUICK_COMP_CASE(qlie) size = qlie_unpack(in, zsize, out, size);
+        QUICK_COMP_CASE(avg32_seen) size = avg32_seen_unpack(in, out, size);
+        QUICK_COMP_CASE(sas5_iar) size = sas5_iar_unpack(in, out, size);
+        QUICK_COMP_CASE(seraphim_scn) size = seraphim_scn_unpack(in, out, size);
+        QUICK_COMP_CASE(ugos_det) size = ugos_det_unpack(in, out, size);
+        QUICK_COMP_CASE(aaru_fl4) size = aaru_fl4_unpack(in, out, size, g_comtype_dictionary ? myatoi(g_comtype_dictionary) : -1);
+        QUICK_COMP_CASE(inspire_ida) size = inspire_ida_unpack(in, out, size);
+        QUICK_COMP_CASE(kurumi_mpk) size = kurumi_mpk_unpack(in, out, size);
+        QUICK_COMP_CASE(dice_rlz) size = dice_rlz_unpack(in, out, size);
+        QUICK_COMP_CASE(pulltop) size = pulltop_unpack(in, out, size);
+        QUICK_COMP_CASE(vnsystem) size = vnsystem_unpack(in, out, size);
+        QUICK_COMP_CASE(QlzUnpack) size = QlzUnpack(in, out, size);
+        QUICK_COMP_CASE(umesoft_pk) size = umesoft_pk_unpack(in, out, size);
+        QUICK_COMP_CASE(tomcat_tcd) size = tomcat_tcd_unpack(in, out, size);
+        QUICK_COMP_CASE(tail_pren) size = tail_pren_unpack(in, out, size);
+        QUICK_COMP_CASE(tail_crp0) size = tail_crp0_unpack(in, out, size);
+        QUICK_COMP_CASE(tail_hp) size = tail_hp_unpack(in, out, size);
+        QUICK_COMP_CASE(tactics_arc) size = tactics_arc_unpack(in, out, size);
+        QUICK_COMP_CASE(sviu_pkz) size = sviu_pkz_unpack(in, out, size);
+        QUICK_COMP_CASE(nekox_gpc) size = nekox_gpc_unpack(in, out, size);
+        QUICK_COMP_CASE(rec_arc) size = rec_arc_unpack(in, out, size);
+        QUICK_COMP_CASE(warc) size = warc_unpack(in, zsize, out);
+        QUICK_COMP_CASE(warc10) size = warc10_unpack(in, out, size);
+        QUICK_COMP_CASE(warc_ylz) size = warc_ylz_unpack(in, out, size);
+        QUICK_COMP_CASE(warc_huff) size = warc_huff_unpack(in, zsize, out, size);
+        QUICK_COMP_CASE(sh_him) size = sh_him_unpack(in, out, size);
+        QUICK_COMP_CASE(pandora_pbx) size = pandora_pbx_unpack(in, out, size);
+        QUICK_COMP_CASE(origin_lz) size = origin_lz_unpack(in, out, size);
+        QUICK_COMP_CASE(origin_huffman) size = origin_huffman_unpack(in, out, size);
+        QUICK_COMP_CASE(origin_rle) size = origin_rle_unpack(in, out, size);
+        QUICK_COMP_CASE(origin_alphav2) size = origin_alphav2_unpack(in, out, size);
+        QUICK_COMP_CASE(garbro_huffman) size = garbro_huffman_unpack(in, out, size);
+        QUICK_COMP_CASE(ankh_grp) size = ankh_grp_unpack(in, out, size);
+        QUICK_COMP_CASE(ankh_hdj) size = ankh_hdj_unpack(in, out, size, g_comtype_dictionary ? myatoi(g_comtype_dictionary) : -1);
+        QUICK_COMP_CASE(caramelbox_arc3) size = caramelbox_arc3_unpack(in, out, size);
+        QUICK_COMP_CASE(caramelbox_arc4) size = caramelbox_arc4_unpack(in, zsize, out);
+        QUICK_COMP_CASE(circus_V1) size = circus_V1_unpack(in, out, size);
+        QUICK_COMP_CASE(circus_V2) size = circus_V2_unpack(in, out, size);
+        QUICK_COMP_CASE(circus_V3) size = circus_V3_unpack(in, out, size);
+        QUICK_COMP_CASE(cmvs_cpz) size = cmvs_cpz_unpack(in, zsize, out, size);
+        QUICK_COMP_CASE(daisystem_pac) size = daisystem_pac_unpack(in, out, size, g_comtype_dictionary ? myatoi(g_comtype_dictionary) : -1);
+        QUICK_COMP_CASE(ethornell_bgi) size = ethornell_bgi_unpack(in, out, size);
+        QUICK_COMP_CASE(fc01_mrg) size = fc01_mrg_unpack(in, zsize, out, size);
+        QUICK_COMP_CASE(fc01_mrg_quant) size = fc01_mrg_quant_unpack(in, zsize, out, size);
+        QUICK_COMP_CASE(fc01_pak_lz) size = fc01_pak_lz_unpack(in, out, size);
+        QUICK_COMP_CASE(favorite_lzw) size = favorite_lzw_unpack(in, out, size);
+        QUICK_COMP_CASE(frontwing_rle) size = frontwing_rle_unpack(in, out, size);
+        QUICK_COMP_CASE(frontwing_huffman) size = frontwing_huffman_unpack(in, out, size);
+        QUICK_COMP_CASE(g2_gcex) size = g2_gcex_unpack(in, out, size);
+        QUICK_COMP_CASE(gss_arc) size = gss_arc_unpack(in, out, size);
+        QUICK_COMP_CASE(hypatia_mariel) size = hypatia_mariel_unpack(in, out, size);
+        QUICK_COMP_CASE(interheart_fpk) size = interheart_fpk_unpack(in, zsize, out, size);
+        QUICK_COMP_CASE(kaguya_ari) size = kaguya_ari_unpack(in, out, size);
+        QUICK_COMP_CASE(kaguya_lin2) size = kaguya_lin2_unpack(in, out, size);
+        QUICK_COMP_CASE(kaguya_link) size = kaguya_link_unpack(in, out, size, g_comtype_dictionary ? myatoi(g_comtype_dictionary) : -1);
+        QUICK_COMP_CASE(kaguya_uf) size = kaguya_uf_unpack(in, out, size);
+        QUICK_COMP_CASE(kid_dat) size = kid_dat_unpack(in, out, size);
+        QUICK_COMP_CASE(lambda_lax) size = lambda_lax_unpack(in, out, size);
+        QUICK_COMP_CASE(microvision_arc) size = microvision_arc_unpack(in, out, size);
+        QUICK_COMP_CASE(moonhir_fpk) size = moonhir_fpk_unpack(in, out, size);
+        QUICK_COMP_CASE(spack) size = spack_unpack(in, zsize, out, size);
+        QUICK_COMP_CASE(azsys) size = azsys_unpack(in, out, size);
+        QUICK_COMP_CASE(dxlib) size = dxlib_unpack(in, zsize, out);
+        QUICK_COMP_CASE(glibg) size = glibg_unpack(in, out, size);
+        QUICK_COMP_CASE(gamesystem_cmp) size = gamesystem_cmp_unpack(in, out, size);
+        QUICK_COMP_CASE(puremail) size = puremail_unpack(in, out, size);
+        QUICK_COMP_CASE(groover_pcg) size = groover_pcg_unpack(in, zsize, out, size);
+        QUICK_COMP_CASE(mnp_mma) size = mnp_mma_unpack(in, out, size);
+        QUICK_COMP_CASE(strikes_pck) size = strikes_pck_unpack(in, size, out, size);
+        QUICK_COMP_CASE(SEGA_LZ77X) size = sega_lz77(in, zsize, out, 1);
+        QUICK_COMP_CASE(NEPTUNIA0) size = neptunia_decompress(in, zsize, out, size);
+        QUICK_COMP_CASE(puff8) size = analyze_Huf8(in, out, size);
+        QUICK_COMP_CASE(lzh8) size = analyze_LZH8(in, out, size);
+        QUICK_COMP_CASE(romchu) size = romchiu(in, zsize, out, size);
+        QUICK_COMP_CASE(okage) size = okage_decompress(in, out);
+        QUICK_COMP_CASE(lzsd_of)   t32 = *outsize; size = lzsd_of_decompress  (in, &out, &t32); *outsize = t32;
+        QUICK_COMP_CASE(lzsd_gfd)  t32 = *outsize; size = lzsd_gfd_decompress (in, &out, &t32); *outsize = t32;
+        QUICK_COMP_CASE(lzsd_gba2) t32 = *outsize; size = lzsd_gba2_decompress(in, &out, &t32); *outsize = t32;
+        QUICK_COMP_CASE(pzz) size = PZZ_Decompress(in, out, zsize);
+        QUICK_COMP_CASE(SL01) size = sld_decode((void *)in, out);
 
 
 
@@ -2776,8 +2980,8 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
                 myalloc(&out, size, outsize); \
             }
 
-        QUICK_COMP_CASE(ZLIB_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = advancecomp_rfc1950(in, zsize, out, size);
-        QUICK_COMP_CASE(DEFLATE_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = advancecomp_deflate(in, zsize, out, size);
+        QUICK_COMP_CASE(ZLIB_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = libdeflate_compress(15, in, zsize, out, size);
+        QUICK_COMP_CASE(DEFLATE_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = libdeflate_compress(-15, in, zsize, out, size);
         QUICK_COMP_CASE(LZO1_COMPRESS)  QUICK_COMP_COMPRESS_DEFAULT(0); size = lzo_compress(in, zsize, out, size, g_compression_type);
         QUICK_COMP_CASE(LZO1X_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = lzo_compress(in, zsize, out, size, g_compression_type);
         QUICK_COMP_CASE(LZO2A_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = lzo_compress(in, zsize, out, size, g_compression_type);
@@ -2828,9 +3032,9 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(SZIP_COMPRESS)
             // not implemented and totally useless, currently it returns error
             QUICK_COMP_COMPRESS_DEFAULT(0);
-            t32 = size;
+            t_size = size;
             size = -1;
-            if(!SZ_BufftoBuffCompress(out, &t32, in, zsize, NULL)) size = t32;
+            if(!SZ_BufftoBuffCompress(out, &t_size, in, zsize, NULL)) size = t_size;
         QUICK_COMP_CASE(HUFFMANLIB_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0);
             t32 = size;
             size = -1;
@@ -2851,7 +3055,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(ZOPFLI_ZLIB_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0);
             size = -1;
             t32 = 0;
-            p = myzopfli(in, zsize, &t32, ZOPFLI_FORMAT_ZLIB);
+            p = myzopfli(in, zsize, &t32, ZOPFLI_FORMAT_ZLIB, g_reimport ? 0 : 1);
             if(p) {
                 if(!g_quickbms_dll) myalloc(&out, size = t32, outsize);
                 memcpy(out, p, size);
@@ -2860,7 +3064,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(ZOPFLI_DEFLATE_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0);
             size = -1;
             t32 = 0;
-            p = myzopfli(in, zsize, &t32, ZOPFLI_FORMAT_DEFLATE);
+            p = myzopfli(in, zsize, &t32, ZOPFLI_FORMAT_DEFLATE, g_reimport ? 0 : 1);
             if(p) {
                 if(!g_quickbms_dll) myalloc(&out, size = t32, outsize);
                 memcpy(out, p, size);
@@ -2886,7 +3090,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             size = -1;
             if(snappy_compress(in, zsize, out, &size_t_tmp) == SNAPPY_OK) size = size_t_tmp;
         QUICK_COMP_CASE(ZPAQ_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = zpaq_compress(in, zsize, out, size);
-        QUICK_COMP_CASE(BLOSC_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(1024 /*???*/); size = blosclz_compress(9, in, zsize, out, size, 0);
+        QUICK_COMP_CASE(BLOSC_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(1024 /*???*/); size = blosclz_compress(9, in, zsize, out, size);
         QUICK_COMP_CASE(GIPFELI_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = gipfeli_compress(in, zsize, out, size);
         QUICK_COMP_CASE(YAPPY_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = yappy_compress(in, zsize, out, size, -1);
         QUICK_COMP_CASE(LZG_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = LZG_Encode(in, zsize, out, size, NULL);
@@ -2955,12 +3159,12 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             size = bsc_compress(in, out, zsize, 16, 128, LIBBSC_BLOCKSORTER_BWT, LIBBSC_CODER_QLFC_STATIC, LIBBSC_FEATURE_NONE);
         QUICK_COMP_CASE(SHOCO_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = shoco_compress(in, zsize, out, size); // shoco works only with strings!!!
         QUICK_COMP_CASE(WFLZ_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); p = malloc(wfLZ_GetWorkMemSize()); size = wfLZ_Compress(in, zsize, out, p, 0); FREE(p);
-        QUICK_COMP_CASE(FASTARI_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); t32 = size; fa_compress(in, out, zsize, &t32); size = t32;
+        QUICK_COMP_CASE(FASTARI_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); t_size = size; fa_compress(in, out, zsize, &t_size); size = t_size;
         QUICK_COMP_CASE(DICKY_COMPRESS)
             p = NULL;
-            t32 = 0;
-            if(!dicky_compress(&p, &t32, in, zsize)) {
-                if(!g_quickbms_dll) myalloc(&out, size = t32, outsize);
+            t_size = 0;
+            if(!dicky_compress(&p, &t_size, in, zsize)) {
+                if(!g_quickbms_dll) myalloc(&out, size = t_size, outsize);
                 memcpy(out, p, size);
             } else {
                 size = -1;
@@ -2994,7 +3198,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             FREE(clzwe_ctx);
             if(!size) size = -1;
         QUICK_COMP_CASE(QUICKLZ_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = doquicklz(in, zsize, out, size);
-        QUICK_COMP_CASE(PKWARE_DCL_COMPRESS) size = pkware_dcl_implode(in, zsize, out, size);
+        QUICK_COMP_CASE(PKWARE_DCL_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = pkware_dcl_implode(in, zsize, out, size);
         QUICK_COMP_CASE(LZ5_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = LZ5_compress_HC(in, out, zsize, size, 16);
         QUICK_COMP_CASE(YALZ77_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = yalz77_compress(in, zsize, out, size);
         QUICK_COMP_CASE(SYNLZ1_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); SynLZ_Init(); size = SynLZcompress1pas(in, zsize, out);
@@ -3012,9 +3216,9 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(DIZZY_COMPRESS)  QUICK_COMP_COMPRESS_DEFAULT(0); size = dizzy_compress(in, zsize, out);
         QUICK_COMP_CASE(LEVEL5_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(4); size = lz77wii_level5_compress(in, zsize, out, size);
         QUICK_COMP_CASE(BROTLI_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0);
-            t32 = size;
-            if(BrotliEncoderCompress(BROTLI_MAX_QUALITY, BROTLI_DEFAULT_WINDOW, BROTLI_DEFAULT_MODE, zsize, in, &t32, out) != BROTLI_TRUE) size = -1;
-            else size = t32;
+            t_size = size;
+            if(BrotliEncoderCompress(BROTLI_MAX_QUALITY, BROTLI_DEFAULT_WINDOW, BROTLI_DEFAULT_MODE, zsize, in, &t_size, out) != BROTLI_TRUE) size = -1;
+            else size = t_size;
         QUICK_COMP_CASE(DRV3_SRD_COMPRESS)      QUICK_COMP_COMPRESS_DEFAULT(zsize /*fake*/); size = drv3_srd_enc_fake(in, zsize, out);
         QUICK_COMP_CASE(YAZ0_COMPRESS)          QUICK_COMP_COMPRESS_DEFAULT(zsize /*fake*/); size = encodeYaz0_fake(in, zsize, out);
         QUICK_COMP_CASE(BIZARRE_COMPRESS)       QUICK_COMP_COMPRESS_DEFAULT(zsize /*fake*/); size = old_bizarre_compress_fake(in, zsize, out, 0);
@@ -3043,9 +3247,23 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(NCOMPRESS_COMPRESS)     QUICK_COMP_COMPRESS_DEFAULT(0); size = ncompress_main(in, zsize, out, size, 0);
         QUICK_COMP_CASE(UNCOMPRESS_COMPRESS)    QUICK_COMP_COMPRESS_DEFAULT(0); size = ncompress_main(in, zsize, out, size, 0); if(size > 3) mymemmove(out, out + 3, size -= 3);
         QUICK_COMP_CASE(LZ4X_NEW_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = lz4x_new(in, zsize, out, 1);
-        QUICK_COMP_CASE(DRAGONBALLZ_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = undragonballz_compress_fake(in, zsize, out);
-        QUICK_COMP_CASE(MPPC_COMPRESS)      size = mppc_pack(in, zsize, out, size, 0);
-        QUICK_COMP_CASE(MPPC_BIG_COMPRESS)  size = mppc_pack(in, zsize, out, size, 1);
+        QUICK_COMP_CASE(DRAGONBALLZ_COMPRESS)   QUICK_COMP_COMPRESS_DEFAULT(zsize /*fake*/); size = undragonballz_compress_fake(in, zsize, out);
+        QUICK_COMP_CASE(MPPC_COMPRESS)      QUICK_COMP_COMPRESS_DEFAULT(0); size = mppc_pack(in, zsize, out, size, 0);
+        QUICK_COMP_CASE(MPPC_BIG_COMPRESS)  QUICK_COMP_COMPRESS_DEFAULT(0); size = mppc_pack(in, zsize, out, size, 1);
+        QUICK_COMP_CASE(APLIB_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = aplib_compress(in, zsize, out);
+        QUICK_COMP_CASE(okage_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = okage_compress(in, zsize, out);
+        QUICK_COMP_CASE(LZ4F_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = lz4f_compress(in, zsize, out, size);
+        QUICK_COMP_CASE(LZ5F_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = lz4f_compress(in, zsize, out, size);
+        QUICK_COMP_CASE(PPMDH_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = ppmdh_compress(in, zsize, out, size);
+        QUICK_COMP_CASE(PPMDI_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = ppmdi_compress(in, zsize, out, size);
+        QUICK_COMP_CASE(PPMDH_RAW_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0);
+            tmp1 = tmp2 = 0;
+            get_parameter_numbers(g_comtype_dictionary, &tmp1, &tmp2, NULL);
+            size = ppmdh_compress_raw(in, zsize, out, size, tmp1, tmp2);
+        QUICK_COMP_CASE(PPMDI_RAW_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0);
+            tmp1 = tmp2 = tmp3 = 0;
+            get_parameter_numbers(g_comtype_dictionary, &tmp1, &tmp2, &tmp3, NULL);
+            size = ppmdi_compress_raw(in, zsize, out, size, tmp1, tmp2, tmp3);
 
         /*QUICK_COMP_CASE last break*/ break;
         default: {
@@ -3080,7 +3298,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
     if(*outsize == old_outsize) {   // the check is made on those algorithms that don't reallocate out
         if((u64)size > (u64)*outsize) {       // "limit" possible overflows with some unsafe algorithms (like sflcomp)
             fprintf(stderr, "\n"
-                "Error: the uncompressed data (%"PRId") is bigger than the allocated buffer (%"PRId")\n"
+                "Error: uncompressed data (%"PRId") bigger than allocated buffer (%"PRId")\n"
                 "       It usually means that data is not compressed or uses another algorithm\n",
                 size, *outsize);
             myexit(QUICKBMS_ERROR_COMPRESSION);

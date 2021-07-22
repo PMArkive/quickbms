@@ -1,21 +1,20 @@
-/*  Buffer to buffer example - Test program for the lzlib library
-    Copyright (C) 2010-2019 Antonio Diaz Diaz.
+/* Buffer to buffer example - Test program for the library lzlib
+   Copyright (C) 2010-2021 Antonio Diaz Diaz.
 
-    This program is free software: you have unlimited permission
-    to copy, distribute and modify it.
+   This program is free software: you have unlimited permission
+   to copy, distribute, and modify it.
 
-    Usage is:
-      bbexample filename
+   Usage: bbexample filename
 
-    This program is an example of how buffer-to-buffer
-    compression/decompression can be implemented using lzlib.
+   This program is an example of how buffer-to-buffer
+   compression/decompression can be implemented using lzlib.
 */
+
+#define _FILE_OFFSET_BITS 64
 
 #include <errno.h>
 #include <limits.h>
-#ifndef __cplusplus
 #include <stdbool.h>
-#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +22,10 @@
 #include <unistd.h>
 
 #include "lzlib.h"
+
+#ifndef min
+  #define min(x,y) ((x) <= (y) ? (x) : (y))
+#endif
 
 
 /* Returns the address of a malloc'd buffer containing the file data and
@@ -35,28 +38,26 @@ uint8_t * read_file( const char * const name, long * const file_sizep )
   uint8_t * buffer, * tmp;
   FILE * const f = fopen( name, "rb" );
   if( !f )
-    {
-    fprintf( stderr, "bbexample: Can't open input file '%s': %s\n",
-             name, strerror( errno ) );
-    return 0;
-    }
+    { fprintf( stderr, "bbexample: Can't open input file '%s': %s\n",
+               name, strerror( errno ) ); return 0; }
 
   buffer = (uint8_t *)malloc( buffer_size );
   if( !buffer )
-    { fputs( "bbexample: Not enough memory.\n", stderr ); return 0; }
+    { fputs( "bbexample: read_file: Not enough memory.\n", stderr );
+      fclose( f ); return 0; }
   file_size = fread( buffer, 1, buffer_size, f );
   while( file_size >= buffer_size )
     {
     if( buffer_size >= LONG_MAX )
       {
       fprintf( stderr, "bbexample: Input file '%s' is too large.\n", name );
-      free( buffer ); return 0;
+      free( buffer ); fclose( f ); return 0;
       }
     buffer_size = ( buffer_size <= LONG_MAX / 2 ) ? 2 * buffer_size : LONG_MAX;
     tmp = (uint8_t *)realloc( buffer, buffer_size );
     if( !tmp )
-      { fputs( "bbexample: Not enough memory.\n", stderr );
-        free( buffer ); return 0; }
+      { fputs( "bbexample: read_file: Not enough memory.\n", stderr );
+        free( buffer ); fclose( f ); return 0; }
     buffer = tmp;
     file_size += fread( buffer + file_size, 1, buffer_size - file_size, f );
     }
@@ -64,7 +65,7 @@ uint8_t * read_file( const char * const name, long * const file_sizep )
     {
     fprintf( stderr, "bbexample: Error reading file '%s': %s\n",
              name, strerror( errno ) );
-    free( buffer ); return 0;
+    free( buffer ); fclose( f ); return 0;
     }
   fclose( f );
   *file_sizep = file_size;
@@ -72,13 +73,13 @@ uint8_t * read_file( const char * const name, long * const file_sizep )
   }
 
 
-/* Compresses 'size' bytes from 'data'. Returns the address of a
-   malloc'd buffer containing the compressed data and its size in
-   '*out_sizep'.
-   In case of error, returns 0 and does not modify '*out_sizep'.
+/* Compresses 'insize' bytes from 'inbuf'.
+   Returns the address of a malloc'd buffer containing the compressed data,
+   and the size of the data in '*outlenp'.
+   In case of error, returns 0 and does not modify '*outlenp'.
 */
-uint8_t * bbcompress( const uint8_t * const data, const long size,
-                      const int level, long * const out_sizep )
+uint8_t * bbcompressl( const uint8_t * const inbuf, const long insize,
+                       const int level, long * const outlenp )
   {
   struct Lzma_options
     {
@@ -100,132 +101,246 @@ uint8_t * bbcompress( const uint8_t * const data, const long size,
     { 3 << 23, 132 },		/* -8 */
     { 1 << 25, 273 } };		/* -9 */
   struct Lzma_options encoder_options;
-  const unsigned long long member_size = 0x7FFFFFFFFFFFFFFFULL;	/* INT64_MAX */
   struct LZ_Encoder * encoder;
-  uint8_t * new_data;
-  const long delta_size = ( size / 4 ) + 64;	/* size may be zero */
-  long new_data_size = delta_size;		/* initial size */
-  long new_pos = 0;
-  long written = 0;
+  uint8_t * outbuf;
+  const long delta_size = ( insize / 4 ) + 64;	/* insize may be zero */
+  long outsize = delta_size;			/* initial outsize */
+  long inpos = 0;
+  long outpos = 0;
   bool error = false;
 
   if( level < 0 || level > 9 ) return 0;
   encoder_options = option_mapping[level];
 
-  if( encoder_options.dictionary_size > size && level != 0 )
-    encoder_options.dictionary_size = size;		/* saves memory */
+  if( encoder_options.dictionary_size > insize && level != 0 )
+    encoder_options.dictionary_size = insize;		/* saves memory */
   if( encoder_options.dictionary_size < LZ_min_dictionary_size() )
     encoder_options.dictionary_size = LZ_min_dictionary_size();
   encoder = LZ_compress_open( encoder_options.dictionary_size,
-                              encoder_options.match_len_limit, member_size );
-  if( !encoder || LZ_compress_errno( encoder ) != LZ_ok )
-    { LZ_compress_close( encoder ); return 0; }
-
-  new_data = (uint8_t *)malloc( new_data_size );
-  if( !new_data )
-    { LZ_compress_close( encoder ); return 0; }
+                              encoder_options.match_len_limit, INT64_MAX );
+  outbuf = (uint8_t *)malloc( outsize );
+  if( !encoder || LZ_compress_errno( encoder ) != LZ_ok || !outbuf )
+    { free( outbuf ); LZ_compress_close( encoder ); return 0; }
 
   while( true )
     {
-    int rd;
-    if( LZ_compress_write_size( encoder ) > 0 )
-      {
-      if( written < size )
-        {
-        const int wr = LZ_compress_write( encoder, data + written,
-                                          size - written );
-        if( wr < 0 ) { error = true; break; }
-        written += wr;
-        }
-      if( written >= size ) LZ_compress_finish( encoder );
-      }
-    rd = LZ_compress_read( encoder, new_data + new_pos,
-                           new_data_size - new_pos );
-    if( rd < 0 ) { error = true; break; }
-    new_pos += rd;
+    int ret = LZ_compress_write( encoder, inbuf + inpos,
+                                 min( INT_MAX, insize - inpos ) );
+    if( ret < 0 ) { error = true; break; }
+    inpos += ret;
+    if( inpos >= insize ) LZ_compress_finish( encoder );
+    ret = LZ_compress_read( encoder, outbuf + outpos,
+                            min( INT_MAX, outsize - outpos ) );
+    if( ret < 0 ) { error = true; break; }
+    outpos += ret;
     if( LZ_compress_finished( encoder ) == 1 ) break;
-    if( new_pos >= new_data_size )
+    if( outpos >= outsize )
       {
       uint8_t * tmp;
-      if( new_data_size > LONG_MAX - delta_size ) { error = true; break; }
-      new_data_size += delta_size;
-      tmp = (uint8_t *)realloc( new_data, new_data_size );
+      if( outsize > LONG_MAX - delta_size ) { error = true; break; }
+      outsize += delta_size;
+      tmp = (uint8_t *)realloc( outbuf, outsize );
       if( !tmp ) { error = true; break; }
-      new_data = tmp;
+      outbuf = tmp;
       }
     }
 
   if( LZ_compress_close( encoder ) < 0 ) error = true;
-  if( error ) { free( new_data ); return 0; }
-  *out_sizep = new_pos;
-  return new_data;
+  if( error ) { free( outbuf ); return 0; }
+  *outlenp = outpos;
+  return outbuf;
   }
 
 
-/* Decompresses 'size' bytes from 'data'. Returns the address of a
-   malloc'd buffer containing the decompressed data and its size in
-   '*out_sizep'.
-   In case of error, returns 0 and does not modify '*out_sizep'.
+/* Decompresses 'insize' bytes from 'inbuf'.
+   Returns the address of a malloc'd buffer containing the decompressed
+   data, and the size of the data in '*outlenp'.
+   In case of error, returns 0 and does not modify '*outlenp'.
 */
-uint8_t * bbdecompress( const uint8_t * const data, const long size,
-                        long * const out_sizep )
+uint8_t * bbdecompressl( const uint8_t * const inbuf, const long insize,
+                         long * const outlenp )
   {
   struct LZ_Decoder * const decoder = LZ_decompress_open();
-  uint8_t * new_data;
-  const long delta_size = size;			/* size must be > zero */
-  long new_data_size = delta_size;		/* initial size */
-  long new_pos = 0;
-  long written = 0;
+  const long delta_size = insize;		/* insize must be > zero */
+  long outsize = delta_size;			/* initial outsize */
+  uint8_t * outbuf = (uint8_t *)malloc( outsize );
+  long inpos = 0;
+  long outpos = 0;
   bool error = false;
-  if( !decoder || LZ_decompress_errno( decoder ) != LZ_ok )
-    { LZ_decompress_close( decoder ); return 0; }
-
-  new_data = (uint8_t *)malloc( new_data_size );
-  if( !new_data )
-    { LZ_decompress_close( decoder ); return 0; }
+  if( !decoder || LZ_decompress_errno( decoder ) != LZ_ok || !outbuf )
+    { free( outbuf ); LZ_decompress_close( decoder ); return 0; }
 
   while( true )
     {
-    int rd;
-    if( LZ_decompress_write_size( decoder ) > 0 )
-      {
-      if( written < size )
-        {
-        const int wr = LZ_decompress_write( decoder, data + written,
-                                            size - written );
-        if( wr < 0 ) { error = true; break; }
-        written += wr;
-        }
-      if( written >= size ) LZ_decompress_finish( decoder );
-      }
-    rd = LZ_decompress_read( decoder, new_data + new_pos,
-                             new_data_size - new_pos );
-    if( rd < 0 ) { error = true; break; }
-    new_pos += rd;
+    int ret = LZ_decompress_write( decoder, inbuf + inpos,
+                                   min( INT_MAX, insize - inpos ) );
+    if( ret < 0 ) { error = true; break; }
+    inpos += ret;
+    if( inpos >= insize ) LZ_decompress_finish( decoder );
+    ret = LZ_decompress_read( decoder, outbuf + outpos,
+                              min( INT_MAX, outsize - outpos ) );
+    if( ret < 0 ) { error = true; break; }
+    outpos += ret;
     if( LZ_decompress_finished( decoder ) == 1 ) break;
-    if( new_pos >= new_data_size )
+    if( outpos >= outsize )
       {
       uint8_t * tmp;
-      if( new_data_size > LONG_MAX - delta_size ) { error = true; break; }
-      new_data_size += delta_size;
-      tmp = (uint8_t *)realloc( new_data, new_data_size );
+      if( outsize > LONG_MAX - delta_size ) { error = true; break; }
+      outsize += delta_size;
+      tmp = (uint8_t *)realloc( outbuf, outsize );
       if( !tmp ) { error = true; break; }
-      new_data = tmp;
+      outbuf = tmp;
       }
     }
 
   if( LZ_decompress_close( decoder ) < 0 ) error = true;
-  if( error ) { free( new_data ); return 0; }
-  *out_sizep = new_pos;
-  return new_data;
+  if( error ) { free( outbuf ); return 0; }
+  *outlenp = outpos;
+  return outbuf;
+  }
+
+
+/* Test the whole file at all levels. */
+int full_test( const uint8_t * const inbuf, const long insize )
+  {
+  int level;
+  for( level = 0; level <= 9; ++level )
+    {
+    long midsize = 0, outsize = 0;
+    uint8_t * outbuf;
+    uint8_t * midbuf = bbcompressl( inbuf, insize, level, &midsize );
+    if( !midbuf )
+      { fputs( "bbexample: full_test: Not enough memory or compress error.\n",
+               stderr ); return 1; }
+
+    outbuf = bbdecompressl( midbuf, midsize, &outsize );
+    free( midbuf );
+    if( !outbuf )
+      { fputs( "bbexample: full_test: Not enough memory or decompress error.\n",
+               stderr ); return 1; }
+
+    if( insize != outsize ||
+        ( insize > 0 && memcmp( inbuf, outbuf, insize ) != 0 ) )
+      { fputs( "bbexample: full_test: Decompressed data differs from original.\n",
+               stderr ); free( outbuf ); return 1; }
+
+    free( outbuf );
+    }
+  return 0;
+  }
+
+
+/* Compresses 'insize' bytes from 'inbuf' to 'outbuf'.
+   Returns the size of the compressed data in '*outlenp'.
+   In case of error, or if 'outsize' is too small, returns false and does
+   not modify '*outlenp'.
+*/
+bool bbcompress( const uint8_t * const inbuf, const int insize,
+                 const int dictionary_size, const int match_len_limit,
+                 uint8_t * const outbuf, const int outsize,
+                 int * const outlenp )
+  {
+  int inpos = 0, outpos = 0;
+  bool error = false;
+  struct LZ_Encoder * const encoder =
+    LZ_compress_open( dictionary_size, match_len_limit, INT64_MAX );
+  if( !encoder || LZ_compress_errno( encoder ) != LZ_ok )
+    { LZ_compress_close( encoder ); return false; }
+
+  while( true )
+    {
+    int ret = LZ_compress_write( encoder, inbuf + inpos, insize - inpos );
+    if( ret < 0 ) { error = true; break; }
+    inpos += ret;
+    if( inpos >= insize ) LZ_compress_finish( encoder );
+    ret = LZ_compress_read( encoder, outbuf + outpos, outsize - outpos );
+    if( ret < 0 ) { error = true; break; }
+    outpos += ret;
+    if( LZ_compress_finished( encoder ) == 1 ) break;
+    if( outpos >= outsize ) { error = true; break; }
+    }
+
+  if( LZ_compress_close( encoder ) < 0 ) error = true;
+  if( error ) return false;
+  *outlenp = outpos;
+  return true;
+  }
+
+
+/* Decompresses 'insize' bytes from 'inbuf' to 'outbuf'.
+   Returns the size of the decompressed data in '*outlenp'.
+   In case of error, or if 'outsize' is too small, returns false and does
+   not modify '*outlenp'.
+*/
+bool bbdecompress( const uint8_t * const inbuf, const int insize,
+                   uint8_t * const outbuf, const int outsize,
+                   int * const outlenp )
+  {
+  int inpos = 0, outpos = 0;
+  bool error = false;
+  struct LZ_Decoder * const decoder = LZ_decompress_open();
+  if( !decoder || LZ_decompress_errno( decoder ) != LZ_ok )
+    { LZ_decompress_close( decoder ); return false; }
+
+  while( true )
+    {
+    int ret = LZ_decompress_write( decoder, inbuf + inpos, insize - inpos );
+    if( ret < 0 ) { error = true; break; }
+    inpos += ret;
+    if( inpos >= insize ) LZ_decompress_finish( decoder );
+    ret = LZ_decompress_read( decoder, outbuf + outpos, outsize - outpos );
+    if( ret < 0 ) { error = true; break; }
+    outpos += ret;
+    if( LZ_decompress_finished( decoder ) == 1 ) break;
+    if( outpos >= outsize ) { error = true; break; }
+    }
+
+  if( LZ_decompress_close( decoder ) < 0 ) error = true;
+  if( error ) return false;
+  *outlenp = outpos;
+  return true;
+  }
+
+
+/* Test at most INT_MAX bytes from the file with buffers of fixed size. */
+int fixed_test( const uint8_t * const inbuf, const int insize )
+  {
+  int dictionary_size = 65535;		/* fast encoder */
+  int midsize = min( INT_MAX, ( insize / 8 ) * 9LL + 44 ), outsize = insize;
+  uint8_t * midbuf = (uint8_t *)malloc( midsize );
+  uint8_t * outbuf = (uint8_t *)malloc( outsize );
+  if( !midbuf || !outbuf )
+    { fputs( "bbexample: fixed_test: Not enough memory.\n", stderr );
+      free( outbuf ); free( midbuf ); return 1; }
+
+  for( ; dictionary_size <= 8 << 20; dictionary_size += 8323073 )
+    {
+    int midlen, outlen;
+    if( !bbcompress( inbuf, insize, dictionary_size, 16, midbuf, midsize, &midlen ) )
+      { fputs( "bbexample: fixed_test: Not enough memory or compress error.\n",
+               stderr ); free( outbuf ); free( midbuf ); return 1; }
+
+    if( !bbdecompress( midbuf, midlen, outbuf, outsize, &outlen ) )
+      { fputs( "bbexample: fixed_test: Not enough memory or decompress error.\n",
+               stderr ); free( outbuf ); free( midbuf ); return 1; }
+
+    if( insize != outlen ||
+        ( insize > 0 && memcmp( inbuf, outbuf, insize ) != 0 ) )
+      { fputs( "bbexample: fixed_test: Decompressed data differs from original.\n",
+               stderr ); free( outbuf ); free( midbuf ); return 1; }
+
+    }
+  free( outbuf );
+  free( midbuf );
+  return 0;
   }
 
 
 int main( const int argc, const char * const argv[] )
   {
-  uint8_t * in_buffer;
-  long in_size = 0;
-  int level;
+  int retval = 0, i;
+  int open_failures = 0;
+  const bool verbose = ( argc > 2 );
 
   if( argc < 2 )
     {
@@ -233,38 +348,20 @@ int main( const int argc, const char * const argv[] )
     return 1;
     }
 
-  in_buffer = read_file( argv[1], &in_size );
-  if( !in_buffer ) return 1;
-
-  for( level = 0; level <= 9; ++level )
+  for( i = 1; i < argc && retval == 0; ++i )
     {
-    uint8_t * mid_buffer, * out_buffer;
-    long mid_size = 0, out_size = 0;
+    long insize;
+    uint8_t * const inbuf = read_file( argv[i], &insize );
+    if( !inbuf ) { ++open_failures; continue; }
+    if( verbose ) fprintf( stderr, "  Testing file '%s'\n", argv[i] );
 
-    mid_buffer = bbcompress( in_buffer, in_size, level, &mid_size );
-    if( !mid_buffer )
-      {
-      fputs( "bbexample: Not enough memory or compress error.\n", stderr );
-      return 1;
-      }
-
-    out_buffer = bbdecompress( mid_buffer, mid_size, &out_size );
-    if( !out_buffer )
-      {
-      fputs( "bbexample: Not enough memory or decompress error.\n", stderr );
-      return 1;
-      }
-
-    if( in_size != out_size ||
-        ( in_size > 0 && memcmp( in_buffer, out_buffer, in_size ) != 0 ) )
-      {
-      fputs( "bbexample: Decompressed data differs from original.\n", stderr );
-      return 1;
-      }
-
-    free( out_buffer );
-    free( mid_buffer );
+    retval = full_test( inbuf, insize );
+    if( retval == 0 ) retval = fixed_test( inbuf, min( INT_MAX, insize ) );
+    free( inbuf );
     }
-  free( in_buffer );
-  return 0;
+  if( open_failures > 0 && verbose )
+    fprintf( stderr, "bbexample: warning: %d %s failed to open.\n",
+             open_failures, ( open_failures == 1 ) ? "file" : "files" );
+  if( retval == 0 && open_failures ) retval = 1;
+  return retval;
   }

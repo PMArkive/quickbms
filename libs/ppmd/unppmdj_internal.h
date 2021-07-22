@@ -35,19 +35,21 @@ typedef unsigned int   UINT;
 #if defined(_32_NORMAL) || defined(_64_NORMAL)
 typedef BYTE  _BYTE;
 typedef WORD  _WORD;
-typedef DWORD _DWORD;
+//typedef DWORD _DWORD;
 #else
 #pragma message ("Warning: real memory usage will be twice larger")
 typedef WORD  _BYTE;
 typedef DWORD _WORD;
 #if defined(_32_EXOTIC)
-typedef DWORD _DWORD;
+//typedef DWORD _DWORD;
 #undef _PAD_TO_64
 #define _PAD_TO_64(Dummy) DWORD Dummy;
 #else
-typedef QWORD _DWORD;
+//typedef QWORD _DWORD;
 #endif
 #endif /* defined(_32_NORMAL) || defined(_64_NORMAL) */
+#include <stdint.h>
+typedef intptr_t    _DWORD;
 
 #if !defined(NDEBUG)
 BOOL TestCompilation();                     /* for testing our data types   */
@@ -78,7 +80,7 @@ BOOL TestCompilation();                     /* for testing our data types   */
 #define _THREAD1
 #endif /* defined(_USE_THREAD_KEYWORD) */
 
-const DWORD PPMdSignature=0x84ACAF8F;
+static const DWORD PPMdSignature=0x84ACAF8F;
 enum { PROG_VAR='J', MAX_O=16 };            /* maximum allowed model order  */
 #define _USE_PREFETCHING                    /* it gives 2-6% speed gain     */
 

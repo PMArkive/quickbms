@@ -116,10 +116,10 @@ int put_type_variable6(int fdnum, u_int num) {
     if(t >= 2) {
         for(mask = 1; ((n + mask) < t) && mask; mask *= 2) {
             if(num & mask) {
-                if(fd_write_bits(1, 1, &bitchr, &bitpos, fdnum) < 0) return -1;
+                if(fd_write_bits(1, 1, &bitchr, &bitpos, fdnum, NULL) < 0) return -1;
                 n += mask;
             } else {
-                if(fd_write_bits(0, 1, &bitchr, &bitpos, fdnum) < 0) return -1;
+                if(fd_write_bits(0, 1, &bitchr, &bitpos, fdnum, NULL) < 0) return -1;
             }
         }
     }

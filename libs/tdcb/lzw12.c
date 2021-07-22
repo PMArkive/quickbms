@@ -44,12 +44,14 @@ unsigned int lzw12_decode_string();
  * text codes.
  */
 
+#define dict    lzw12_dict
 struct dictionary {
     int code_value;
     int parent_code;
     char character;
 } dict[ TABLE_SIZE ];
 
+#define decode_stack    lzw12_decode_stack
 char decode_stack[ TABLE_SIZE ];
 
 /*

@@ -1,3 +1,4 @@
+// modified by Luigi Auriemma
 /* Program to unsqueeze files formed by sq.com
  *
  * Useage:
@@ -62,6 +63,9 @@
 #define EXTERN extern
 #endif
 
+#undef EXTERN   // aluigi //
+#define EXTERN  static
+
 /* Definitions and external declarations */
 
 #define RECOGNIZE 0xFF76	/* unlikely pattern */
@@ -108,7 +112,7 @@ static int xgetc(void *X) {
 
 
 
-int getw16(iob)			/* get 16-bit word from file */
+static int getw16(iob)			/* get 16-bit word from file */
 FILE *iob;
 {
 int temp;
@@ -121,7 +125,7 @@ return (temp);
 }
 
 
-int getx16(iob)			/* get 16-bit (unsigned) word from file */
+static int getx16(iob)			/* get 16-bit (unsigned) word from file */
 FILE *iob;
 {
 int temp;
@@ -134,12 +138,12 @@ return(temp);
 
 /* initialize decoding functions */
 
-void init_cr()
+static void init_cr()
 {
 	repct = 0;
 }
 
-void init_huff()
+static void init_huff()
 {
 	bpos = 99;	/* force initial read */
 }
@@ -149,7 +153,7 @@ void init_huff()
  * repetition encoding remaining.
  */
 
-int
+static int
 getuhuff(ib)
 FILE *ib;
 {
@@ -184,7 +188,7 @@ FILE *ib;
  * repeated more than twice are encoded as value-DLE-count.
  */
 
-int
+static int
 getcr(ib)
 FILE *ib;
 {

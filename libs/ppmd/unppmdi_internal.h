@@ -13,8 +13,8 @@ typedef unsigned short WORD;
 typedef unsigned long  DWORD;
 typedef unsigned int   UINT;
 
-const DWORD PPMdSignature=0x84ACAF8F, Variant='I';
-const int MAX_O=16;                         /* maximum allowed model order  */
+static const DWORD PPMdSignature=0x84ACAF8F, Variant='I';
+static const int MAX_O=16;                         /* maximum allowed model order  */
 
 //#define _USE_PREFETCHING                    /* for puzzling mainly          */
 #if defined(__GNUC__)

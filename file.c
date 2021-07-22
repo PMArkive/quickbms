@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2019 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -28,18 +28,36 @@ int myfw(int fdnum, u8 *data, int size);
 
 
 
-u64 myfilesize(int fdnum) {
-    struct stat xstat;
+int myfread(FILE *fd, u8 *data, int size, int quit_if_diff) {
+    int     len;
 
+    if(size < 0) {
+        size = BUFFSZ;
+        quit_if_diff = 0;
+    }
+    if(data) {
+        len = fread(data, 1, size, fd);
+    } else {
+        len = size;
+        if(fseek(fd, size, SEEK_CUR) < 0) len = -1;
+    }
+    if((len != size) && quit_if_diff) {
+        if(g_continue_anyway) return -1;
+        myexit(QUICKBMS_ERROR_FILE_READ);
+    }
+    return len;
+}
+
+
+
+u64 myfilesize(int fdnum) {
     if(fdnum < 0) {
         CHECK_MEMNUM(0)
-        return(g_memory_file[-fdnum].size);
+        return(g_memory_file[myabs(fdnum)].size);
     }
     CHECK_FILENUM
     if(g_filenumber[fdnum].fd) {
-        xstat.st_size = 0;
-        fstat(fileno(g_filenumber[fdnum].fd), &xstat);
-        return(xstat.st_size);
+        return filesize(g_filenumber[fdnum].fd);
     }
     // sockets and streams want the max signed value
     if(g_filenumber[fdnum].pd) return(((u_int)(-1)) >> 1);    // 0x7fffffff... return(((process_file_t *)g_filenumber[fdnum].pd)->size);
@@ -51,18 +69,12 @@ u64 myfilesize(int fdnum) {
 
 
 u_int memfile_resize(memory_file_t *memfile, u_int offset) {
-    if(offset < memfile->size) {
-        memfile->size = offset;
+    u_int   oldsize = memfile->size;
+    memfile->size = offset;
+    if(offset <= oldsize) {
+        if(memfile->pos > memfile->size) memfile->pos = memfile->size;
     } else {
-        int oldsize = memfile->size;
-        memfile->size = offset;
-        if(memfile->size > memfile->maxsize) {
-            memfile->maxsize = memfile->size;
-            MAX_ALLOC_CHECK(memfile->maxsize);
-            memfile->data = realloc(memfile->data, memfile->maxsize + 1);
-            if(!memfile->data) STD_ERR(QUICKBMS_ERROR_MEMORY);
-            memfile->data[memfile->maxsize] = 0;
-        }
+        myalloc(&memfile->data, memfile->size, &memfile->maxsize);
         memset(memfile->data + oldsize, 0, memfile->size - oldsize);
     }
     return memfile->size;
@@ -73,7 +85,7 @@ u_int memfile_resize(memory_file_t *memfile, u_int offset) {
 u_int myftruncate(int fdnum, int fsize) {
     if(fdnum < 0) {
         CHECK_MEMNUM(0)
-        return memfile_resize(&g_memory_file[-fdnum], fsize);
+        return memfile_resize(&g_memory_file[myabs(fdnum)], fsize);
     }
     CHECK_FILENUM
     if(g_filenumber[fdnum].fd) {
@@ -117,60 +129,63 @@ FILE *get_fdnum_file_descriptor(int fdnum) {
 
 
 
-int make_file_space(FILE *fd, int size) {
+u8 *QUICKBMS_CACHED_IO(int *ret_size) {
+    #define QUICKBMS_CACHED_IO_SIZE     (512 * 1024)    // this is probably the best size for optimal speed
+    static u8   *tmp = NULL;
+    if(!tmp) {
+        tmp = malloc(QUICKBMS_CACHED_IO_SIZE);
+        if(!tmp) STD_ERR(QUICKBMS_ERROR_MEMORY);
+    }
+    if(ret_size) *ret_size = QUICKBMS_CACHED_IO_SIZE;
+    return tmp;
+}
+
+
+
+#define TMP_FILE_READ(FREAD, FD, DO) \
+    int     t, \
+            tmpsz; \
+    u8      *tmp = QUICKBMS_CACHED_IO(&tmpsz); \
+    \
+    for(len = 0; len < size; len += t) { \
+        t = tmpsz; \
+        if((size - len) < t) t = size - len; \
+        t = FREAD(FD, tmp, t, TRUE); \
+        if(t <= 0) { \
+            DO; \
+        }
+
+
+
+int make_file_space(FILE *fd, int space) {
+    u_int   offset;
+    int     size;
+
+    // there are only two solutions:
+    // 1) read and write one byte per time
+    // 2) read whole data
+    // caching works but it may happen (don't know when) that our amount is smaller than expected and making a mess
+    offset = ftell(fd);
+    size = filesize(fd) - offset;
+    if(size <= 0) return 0;
+
     static int  tmpsz   = 0;
     static u8   *tmp    = NULL;
-    int     t,
-            len;
 
-    u_int   original_offset,
-            offset;
-    original_offset = ftell(fd);
-
-        if(!tmp) {
-            tmpsz = QUICKBMS_CACHED_IO_SIZE;
-            tmp = malloc(tmpsz);
-            if(!tmp) STD_ERR(QUICKBMS_ERROR_MEMORY);
-        }
-
-        for(len = 0; len < size; len += t) {
-            t = tmpsz;
-            if((size - len) < t) t = size - len;
-
-            t = fread(tmp, 1, t, fd);
-            if(t <= 0) break;
-            offset = ftell(fd);
-
-            fseek(fd, (offset - t) + size, SEEK_SET);
-
-            t = fwrite(tmp, 1, t, fd);
-            if(t <= 0) break;
-
-            fseek(fd, offset, SEEK_SET);
-        }
-    fseek(fd, original_offset, SEEK_SET);
-    return size;
+    myalloc(&tmp, size, &tmpsz);
+    myfread(fd, tmp, size, TRUE);
+    fseek(fd, offset + space, SEEK_SET);
+    if(fwrite(tmp, 1, size, fd) != size) return -1;
+    //FREE(tmp)
+    fseek(fd, offset, SEEK_SET);
+    return 0;
 }
 
 
 
 int file_compare(FILE *fd, u8 *data, int size) {
-    static int  tmpsz   = 0;
-    static u8   *tmp    = NULL;
-    int     t,
-            len;
-
-    if(!tmp) {
-        tmpsz = QUICKBMS_CACHED_IO_SIZE;
-        tmp = malloc(tmpsz);
-        if(!tmp) STD_ERR(QUICKBMS_ERROR_MEMORY);
-    }
-
-    for(len = 0; len < size; len += t) {
-        t = tmpsz;
-        if((size - len) < t) t = size - len;
-        t = fread(tmp, 1, t, fd);
-        if(t <= 0) return -1;
+    int     len;
+    TMP_FILE_READ(myfread, fd, return -1)
         if(memcmp(tmp, data + len, t)) {
             return -1;
         }
@@ -181,22 +196,8 @@ int file_compare(FILE *fd, u8 *data, int size) {
 
 
 int file_duplicate(FILE *fd, FILE *fdo, int size) {
-    static int  tmpsz   = 0;
-    static u8   *tmp    = NULL;
-    int     t,
-            len;
-
-    if(!tmp) {
-        tmpsz = QUICKBMS_CACHED_IO_SIZE;
-        tmp = malloc(tmpsz);
-        if(!tmp) STD_ERR(QUICKBMS_ERROR_MEMORY);
-    }
-
-    for(len = 0; len < size; len += t) {
-        t = tmpsz;
-        if((size - len) < t) t = size - len;
-        t = fread(tmp, 1, t, fd);
-        if(t <= 0) return -1;
+    int     len;
+    TMP_FILE_READ(myfread, fd, return -1)
         if(fwrite(tmp, 1, t, fdo) != t) {
             return -1;
         }
@@ -291,7 +292,7 @@ int fcoverage(int fdnum) {
 
     if(fdnum < 0) {
         CHECK_MEMNUM(0)
-        memfile = &g_memory_file[-fdnum];
+        memfile = &g_memory_file[myabs(fdnum)];
         coverage = memfile->coverage;
         fsize    = myfilesize(fdnum);
         offset   = myftell(fdnum);
@@ -305,10 +306,15 @@ int fcoverage(int fdnum) {
 
     if(fsize) { // avoids division by zero
         perc = (u64)((u64)coverage * (u64)100) / (u64)fsize;
+        u8 perc_fix = ' ';
+        if((perc < 0) || (perc > 100)) {
+            perc     = 100;
+            perc_fix = '!';
+        }
         fprintf(stderr,
-            "  coverage file %-3d %3d%%   %-10"PRIu" %-10"PRIu" . offset %"PRIx"\n",
+            "  coverage file %-3d %3d%%%c  %-10"PRIu" %-10"PRIu" . offset %"PRIx"\n",
             (i32)fdnum,
-            (i32)perc,
+            (i32)perc, perc_fix,
             coverage,
             fsize,
             offset);
@@ -316,9 +322,9 @@ int fcoverage(int fdnum) {
         if(g_parsing_debug && fdnum_is_valid && filez && filez->fd) {   // filez already assigned
             parsing_debug_t *parsing_debug, *parsing_debug_tmp1, *parsing_debug_tmp2;
             parsing_debug = real_calloc(1, sizeof(parsing_debug_t));
-            parsing_debug->offset               = fsize;
-            parsing_debug->end_offset           = fsize;
-            parsing_debug->entropy              = 0.0;
+            parsing_debug->offset       = fsize;
+            parsing_debug->end_offset   = fsize;
+            parsing_debug->entropy      = 0.0;
             CDL_APPEND(filez->parsing_debug, parsing_debug);    // EOF
             CDL_SORT(filez->parsing_debug, parsing_debug_sort);
             i32     chunks  = 0;
@@ -361,6 +367,19 @@ int fcoverage(int fdnum) {
 
 
 
+int myfreset(int fdnum) {
+    memory_file_t   *memfile;
+    if(fdnum < 0) {
+        CHECK_MEMNUM(0)
+        memfile = &g_memory_file[myabs(fdnum)];
+        memfile_resize(memfile, 0);
+    }
+    myfseek(fdnum, 0, SEEK_SET);
+    return 0;
+}
+
+
+
 int myfclose(int fdnum) {
     memory_file_t   *memfile;
     filenumber_t    *filez;
@@ -371,7 +390,7 @@ int myfclose(int fdnum) {
 
     if(fdnum < 0) {
         CHECK_MEMNUM(0)
-        memfile = &g_memory_file[-fdnum];
+        memfile = &g_memory_file[myabs(fdnum)];
         // do NOT free memfile->data, it can be reused
         memfile->pos  = 0;
         memfile->size = 0;
@@ -423,6 +442,19 @@ u8 *dumpa_backup_fname(u8 *fname) {
 
 
 
+i32 mydown_get_host(u8 *url, u8 **hostx, u16 *portx, u8 **urix, u8 **userx, u8 **passx, i32 verbose);
+
+
+
+int fdnum_uses_filexor(int fdnum, filexor_t *fx) {
+    if((fx->size > 0) && ((fx->fd < -MAX_FILES) || (fx->fd == fdnum))) {
+        return 1;
+    }
+    return 0;
+}
+
+
+
 int fdnum_open(u8 *fname, int fdnum, int error) {
     static u8   filedir[PATHSZ + 1];
     socket_file_t   *sockfile;
@@ -433,10 +465,11 @@ int fdnum_open(u8 *fname, int fdnum, int error) {
     filenumber_t    *filez;
     u64     filesize;
     u8      tmp[32],
-            *p;
+            *p,
+            *fullname   = fname;
 
     if(!fname) return 0;
-    if((fdnum < 0) || !strnicmp(fname, MEMORY_FNAME, MEMORY_FNAMESZ)) {
+    if((fdnum < 0) || is_MEMORY_FILE(fname)) {
         fprintf(stderr, "\n"
             "Error: the filenumber field is minor than 0, if you want to use MEMORY_FILE\n"
             "       you don't need to \"reopen\" it in this way, just specify MEMORY_FILE\n"
@@ -473,13 +506,36 @@ int fdnum_open(u8 *fname, int fdnum, int error) {
     if(strstr(fname, "://")) {
         sockfile = socket_open(fname);
         if(sockfile) {
-            sprintf(tmp, "%u", sockfile->port);
-            re_strdup(&filez->fullname, fname, NULL);
-            filez->filename = realloc(filez->filename, strlen(sockfile->host) + 1 + strlen(tmp) + 1);
-            sprintf(filez->filename, "%s:%s", sockfile->host, tmp);
-            re_strdup(&filez->basename, sockfile->host, NULL);
-            re_strdup(&filez->fileext,  tmp, NULL);
             filez->sd       = sockfile;
+            re_strdup(&filez->fullname, fname, NULL);
+            if((sockfile->proto == IPPROTO_HTTP) || (sockfile->proto == IPPROTO_HTTPS)) {
+                u8      *host   = NULL;
+                u16     port    = 0;
+                u8      *uri    = NULL;
+                mydown_get_host(fname, &host, &port, &uri, NULL, NULL, 0);
+
+                fullname = uri;
+                p = mystrchrs(fullname, "?&");
+                if(p) *p = 0;
+                goto set_filez;
+
+                // ???
+                if(host) real_free(host);
+                if(uri)  real_free(uri);
+            } else {
+                sprintf(tmp, "%u", sockfile->port);
+                filez->filename = realloc(filez->filename, strlen(sockfile->host) + 1 + strlen(tmp) + 1);
+                p = get_filename(sockfile->host);
+                if(sockfile->port && !strchr(fname, '/')) {
+                    sprintf(filez->filename, "%s:%s", p, tmp);
+                } else {
+                    sprintf(filez->filename, "%s",    p);
+                }
+                p = mystrchrs(filez->filename, "?&");
+                if(p) *p = 0;
+                re_strdup(&filez->basename, sockfile->host, NULL);
+                re_strdup(&filez->fileext,  tmp, NULL); // the port
+            }
             return 0;
         }
 
@@ -527,7 +583,9 @@ int fdnum_open(u8 *fname, int fdnum, int error) {
     }
 
     if(g_write_mode) {
+        g_force_readwrite_mode = 1;
         filez->fd = xfopen(fname, "r+b");    // do NOT modify, it must be both read/write
+        g_force_readwrite_mode = 0; // automatically resetted by xfopen but it's ok
         if(!filez->fd) {
             if(g_reimport) {
                 if(error) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
@@ -556,6 +614,10 @@ int fdnum_open(u8 *fname, int fdnum, int error) {
             if(!filez->fd) {
                 if(error) STD_ERR(QUICKBMS_ERROR_FILE_READ);
                 return -1;
+            }
+            filez->temporary_file = 0;
+            if(!stricmp(filez->fullname, TEMPORARY_FILE)) {
+                filez->temporary_file = 1;
             }
         }
     }
@@ -590,18 +652,23 @@ int fdnum_open(u8 *fname, int fdnum, int error) {
     // filesize
     //filez->filesize = filesize;
 
+    if(filez->temporary_file) {
+        if(filez->filename) {
+            goto skip_set_filez;    // keep the old references
+        }
+    }
+
     // fullname
     re_strdup(&filez->fullname, get_fullpath_from_name(fname, 0), NULL);    // allocate
+    fullname = filez->fullname;
 
+set_filez:
     // filename
-    p = get_filename(filez->fullname);
+    p = get_filename(fullname);
     re_strdup(&filez->filename, p, NULL);
 
-    // prev_basename
-    re_strdup(&filez->prev_basename, filez->basename, NULL);  // allocate
-
     // basename
-    re_strdup(&filez->basename, filez->filename, NULL);  // allocate
+    re_strdup(&filez->basename, filez->filename, NULL); // allocate
     p = strrchr(filez->basename, '.');
     if(p) *p = 0;
 
@@ -610,25 +677,26 @@ int fdnum_open(u8 *fname, int fdnum, int error) {
     re_strdup(&filez->fileext, p, NULL);
 
     // filepath
-    re_strdup(&filez->filepath, filez->fullname, NULL);  // allocate
+    re_strdup(&filez->filepath, fullname, NULL);        // allocate
     p = mystrrchrs(filez->filepath, PATH_DELIMITERS);
     if(!p) p = filez->filepath;
     *p = 0;
 
     // fullbasename
-    re_strdup(&filez->fullbasename, filez->fullname, NULL);  // allocate
+    re_strdup(&filez->fullbasename, fullname, NULL);    // allocate
     p = mystrrchrs(filez->fullbasename, PATH_DELIMITERS);
     if(!p) p = filez->fullbasename;
     p = strrchr(p, '.');
     if(p) *p = 0;
 
+skip_set_filez:
     // basically they are used for every operation but it's better if they get reinitialized when fdnum 0 is open,
     // the alternative is calling myfseek(fdnum, 0, SEEK_SET) which is probably very time consuming,
     // another possible alternative is: post_fseek_actions(fdnum, QUICKBMS_MIN_INT)
+    if(fdnum_uses_filexor(fdnum, &g_filexor))   *g_filexor.pos   = 0;
+    if(fdnum_uses_filexor(fdnum, &g_filerot))   *g_filerot.pos   = 0;
+    if(fdnum_uses_filexor(fdnum, &g_filecrypt)) *g_filecrypt.pos = 0;
     if(!fdnum) {
-        if(g_filexor.pos)   *g_filexor.pos = 0;
-        if(g_filerot.pos)   *g_filerot.pos = 0;
-        if(g_filecrypt.pos) *g_filecrypt.pos = 0;
         if(g_mex_default) add_var(BytesRead_idx, NULL, NULL, 0, sizeof(int));
     }
 
@@ -641,7 +709,7 @@ int fdnum_open(u8 *fname, int fdnum, int error) {
 u_int myftell(int fdnum) {
     if(fdnum < 0) {
         CHECK_MEMNUM(0)
-        return(g_memory_file[-fdnum].pos);
+        return(g_memory_file[myabs(fdnum)].pos);
     }
     CHECK_FILENUM
     if(g_filenumber[fdnum].fd) return(ftell(g_filenumber[fdnum].fd));
@@ -679,12 +747,12 @@ void bytesread_eof(int fdnum, int len) {
 void post_fseek_actions(int fdnum, int diff_offset) {
 #define post_fseek_actions_do(X)    { \
         (*X) += diff_offset; \
-        if((*X) < 0) (*X) = 0; \
+        /*if((*X) < 0) (*X) = 0;*/ \
     }
 
-    if(g_filexor.size   > 0) post_fseek_actions_do(g_filexor.pos)
-    if(g_filerot.size   > 0) post_fseek_actions_do(g_filerot.pos)
-    if(g_filecrypt.size > 0) post_fseek_actions_do(g_filecrypt.pos)
+    if(fdnum_uses_filexor(fdnum, &g_filexor))   post_fseek_actions_do(g_filexor.pos)
+    if(fdnum_uses_filexor(fdnum, &g_filerot))   post_fseek_actions_do(g_filerot.pos)
+    if(fdnum_uses_filexor(fdnum, &g_filecrypt)) post_fseek_actions_do(g_filecrypt.pos)
     if(g_mex_default) bytesread_eof(fdnum, diff_offset);
 }
 
@@ -696,7 +764,7 @@ int myfeof(int fdnum) {
 
     if(fdnum < 0) {
         CHECK_MEMNUM(0)
-        memfile = &g_memory_file[-fdnum];
+        memfile = &g_memory_file[myabs(fdnum)];
         if(memfile->pos >= memfile->size) {
             ret = 1;
         }
@@ -710,24 +778,39 @@ int myfeof(int fdnum) {
 
 
 
+u8 *myfdata(int fdnum) {
+    memory_file_t   *memfile    = NULL;
+    if(fdnum < 0) {
+        CHECK_MEMNUM(0)
+        memfile = &g_memory_file[myabs(fdnum)];
+        return memfile->data;
+    } else {
+        CHECK_FILENUM
+        return NULL;
+    }
+    return NULL;
+}
+
+
+
 void post_fread_actions(int fdnum, u8 *data, int size) {
     int     i;
 
     // fdnum is used only for bytesread_eof so ignore it
     //if(!data) not needed here
-    if(g_filexor.size > 0) {
+    if(fdnum_uses_filexor(fdnum, &g_filexor)) {
         for(i = 0; i < size; i++) {
             data[i] ^= g_filexor.key[(*g_filexor.pos) % g_filexor.size];
             (*g_filexor.pos)++;
         }
     }
-    if(g_filerot.size > 0) {
+    if(fdnum_uses_filexor(fdnum, &g_filerot)) {
         for(i = 0; i < size; i++) {
             data[i] += g_filerot.key[(*g_filerot.pos) % g_filerot.size];
             (*g_filerot.pos)++;
         }
     }
-    if(g_filecrypt.size > 0) {
+    if(fdnum_uses_filexor(fdnum, &g_filecrypt)) {
         perform_encryption(data, size);
     }
     if(g_mex_default) bytesread_eof(fdnum, size);
@@ -742,7 +825,7 @@ int myfr_remove_coverage(int fdnum, int len) {
     memory_file_t   *memfile    = NULL;
     if(fdnum < 0) {
         CHECK_MEMNUM(0)
-        memfile = &g_memory_file[-fdnum];
+        memfile = &g_memory_file[myabs(fdnum)];
         memfile->coverage += len;
     } else {
         CHECK_FILENUMX
@@ -765,13 +848,12 @@ int myfr(int fdnum, u8 *data, int size, int quit_if_diff) {
     }
     if(fdnum < 0) {
         CHECK_MEMNUM(size)    // fake writer
-        memfile = &g_memory_file[-fdnum];
+        memfile = &g_memory_file[myabs(fdnum)];
         if(!memfile->data) {
-            fdnum = -fdnum;
-            if(fdnum == 1) {
+            if(myabs(fdnum) == 1) {
                 fprintf(stderr, "\nError: MEMORY_FILE has not been used/declared yet\n");
             } else {
-                fprintf(stderr, "\nError: MEMORY_FILE%d has not been used/declared yet\n", (i32)fdnum);
+                fprintf(stderr, "\nError: MEMORY_FILE%d has not been used/declared yet\n", (i32)myabs(fdnum));
             }
             myexit(QUICKBMS_ERROR_BMS);
         }
@@ -847,6 +929,84 @@ int myfr(int fdnum, u8 *data, int size, int quit_if_diff) {
 
 
 
+// copied from dumpa_memory_file, experimental
+int fdnum_append_mode(memory_file_t *memfile, FILE *fd, int size) {
+    if(g_append_mode == APPEND_MODE_NONE) return -1;
+
+    int     cmd = g_last_cmd;
+    if(
+        (CMD.type != CMD_Put)
+     && (CMD.type != CMD_PutDString)
+     && (CMD.type != CMD_PutCT)
+     && (CMD.type != CMD_PutBits)   // ???
+    ) return -1;
+
+    if(memfile) {
+
+               if(g_append_mode == APPEND_MODE_APPEND) {
+            memfile->pos   = memfile->size;
+            if((memfile->size + size) < memfile->size) ALLOC_ERR;
+            memfile->size += size;
+            myalloc(&memfile->data, memfile->size, &memfile->maxsize);
+
+        } else if(g_append_mode == APPEND_MODE_OVERWRITE) {
+            // allow goto to decide where placing the new content
+            if((memfile->size + size) < memfile->size) ALLOC_ERR;
+            if((memfile->pos + size) > memfile->size) {
+                memfile->size = memfile->pos + size;
+                myalloc(&memfile->data, memfile->size, &memfile->maxsize);
+            }
+
+        } else if(g_append_mode == APPEND_MODE_BEFORE) {
+            memfile->pos   = 0;
+            if((memfile->size + size) < memfile->size) ALLOC_ERR;
+            memfile->size += size;
+            myalloc(&memfile->data, memfile->size, &memfile->maxsize);
+            mymemmove(memfile->data + size, memfile->data, memfile->size - size);
+
+        } else if(g_append_mode == APPEND_MODE_INSERT) {
+            if((memfile->size + size) < memfile->size) ALLOC_ERR;
+            memfile->size += size;
+            myalloc(&memfile->data, memfile->size, &memfile->maxsize);
+            mymemmove(memfile->data + memfile->pos + size, memfile->data + memfile->pos, memfile->size - (memfile->pos + size));
+        }
+
+    } else if(fd) {
+
+        u_int   fd_pos  = ftell(fd);
+        u_int   fd_size = filesize(fd);
+
+               if(g_append_mode == APPEND_MODE_APPEND) {
+            fseek(fd, 0, SEEK_END);
+            fd_pos   = fd_size;
+            if((fd_size + size) < fd_size) ALLOC_ERR;
+            fd_size += size;
+
+        } else if(g_append_mode == APPEND_MODE_OVERWRITE) {
+            // allow goto to decide where placing the new content
+            if((fd_size + size) < fd_size) ALLOC_ERR;
+            if((fd_pos + size) > fd_size) fd_size = fd_pos + size;
+
+        } else if(g_append_mode == APPEND_MODE_BEFORE) {
+            fseek(fd, 0, SEEK_SET);
+            fd_pos   = 0;
+            if((fd_size + size) < fd_size) ALLOC_ERR;
+            make_file_space(fd, size);
+            fd_size += size;
+
+        } else if(g_append_mode == APPEND_MODE_INSERT) {
+            if((fd_size + size) < fd_size) ALLOC_ERR;
+            make_file_space(fd, size);
+            fd_size += size;
+        }
+
+    }
+
+    return 0;
+}
+
+
+
 int myfw(int fdnum, u8 *data, int size) {
     memory_file_t   *memfile    = NULL;
     int     len = 0,
@@ -863,22 +1023,25 @@ int myfw(int fdnum, u8 *data, int size) {
     post_fread_actions(-1, data, size);
     if(fdnum < 0) {
         CHECK_MEMNUM(size)    // fake writer
-        memfile = &g_memory_file[-fdnum];
+        memfile = &g_memory_file[myabs(fdnum)];
         if(!memfile->data) {
-            fdnum = -fdnum;
-            if(fdnum == 1) {
+            if(myabs(fdnum) == 1) {
                 fprintf(stderr, "\nError: MEMORY_FILE has not been used/declared yet\n");
             } else {
-                fprintf(stderr, "\nError: MEMORY_FILE%d has not been used/declared yet\n", (i32)fdnum);
+                fprintf(stderr, "\nError: MEMORY_FILE%d has not been used/declared yet\n", (i32)myabs(fdnum));
             }
             myexit(QUICKBMS_ERROR_BMS);
         }
         len = size;
-        tmp = memfile->pos + len;
-        if((tmp < memfile->pos) || (tmp < len)) ALLOC_ERR;
-        if(tmp > memfile->size) {
-            memfile->size = tmp;
-            myalloc(&memfile->data, memfile->size, &memfile->maxsize);
+        if(!fdnum_append_mode(memfile, NULL, size)) {
+            // nothing to do, all done by the function
+        } else {
+            tmp = memfile->pos + len;
+            if((tmp < memfile->pos) || (tmp < len)) ALLOC_ERR;
+            if(tmp > memfile->size) {
+                memfile->size = tmp;
+                myalloc(&memfile->data, memfile->size, &memfile->maxsize);
+            }
         }
         memcpy(memfile->data + memfile->pos, data, len);
         memfile->pos += len;
@@ -890,6 +1053,7 @@ int myfw(int fdnum, u8 *data, int size) {
             //   put 1234  long
             // so, also for better security, I have added the -w check directly here
             if(g_write_mode) {
+                fdnum_append_mode(NULL, g_filenumber[fdnum].fd, size);
                 len = fwrite(data, 1, size, g_filenumber[fdnum].fd);
                 fflush(g_filenumber[fdnum].fd);
             }
@@ -1004,7 +1168,7 @@ int myfseek(int fdnum, u_int offset, int type) {
     oldsize = myfilesize(fdnum);
     if(fdnum < 0) {
         CHECK_MEMNUM(0)
-        memfile = &g_memory_file[-fdnum];
+        memfile = &g_memory_file[myabs(fdnum)];
         switch(type) {
             case SEEK_SET: memfile->pos = offset;                   break;
             case SEEK_CUR: memfile->pos += offset;                  break;
@@ -1076,10 +1240,10 @@ u64 getxx(u8 *tmp, int bytes) {
     for(i = 0; i < bytes; i++) {
         if(g_endian == MYLITTLE_ENDIAN) {
             if(i >= (int)sizeof(num)) continue;
-            num |= ((u_int)tmp[i] << (u_int)(i << (u_int)3));
+            num |= ((u64)tmp[i] << (u64)(i << (u64)3));
         } else {
             if(i < (bytes - (int)sizeof(num))) continue;
-            num |= ((u_int)tmp[i] << (u_int)((bytes - (u_int)1 - i) << (u_int)3));
+            num |= ((u64)tmp[i] << (u64)((bytes - (u64)1 - i) << (u64)3));
         }
     }
     return(num);
@@ -1093,10 +1257,10 @@ int putxx(u8 *data, u64 num, int bytes) {
     if(!data) return 0;
     for(i = 0; i < bytes; i++) {
         if(g_endian == MYLITTLE_ENDIAN) {
-            if(i < (int)sizeof(num))            data[i] = num >> (i << (u_int)3);
+            if(i < (int)sizeof(num))            data[i] = num >> (i << (u64)3);
             else                                data[i] = 0;
         } else {
-            if(i >= (bytes - (int)sizeof(num))) data[i] = num >> ((bytes - (u_int)1 - i) << (u_int)3);
+            if(i >= (bytes - (int)sizeof(num))) data[i] = num >> ((bytes - (u64)1 - i) << (u64)3);
             else                                data[i] = 0;
         }
     }
@@ -1150,8 +1314,8 @@ int fgetxx(int fdnum, int bytes, int *error) {
 //  bitoff = the current offset, it's necessary to know if in the meantime
 //           the user has changed offset and so bitpos must be resetted
 
-u_int fd_read_bits(u_int bits, u8 *bitchr, u8 *bitpos, int fd) {
-    u_int   ret = 0;
+u64 fd_read_bits(u_int bits, u8 *bitchr, u8 *bitpos, int fd, u8 **data) {
+    u64     ret = 0;
     int     i,
             t;
     u8      bc  = 0,
@@ -1163,13 +1327,13 @@ u_int fd_read_bits(u_int bits, u8 *bitchr, u8 *bitpos, int fd) {
     (bp) &= 7; // just for security
     for(i = 0; i < bits; i++) {
         if(!bp) {
-            t = myfgetc(fd);
+            t = data ? *(*data)++ : myfgetc(fd);
             bc = (t < 0) ? 0 : t;
         }
         if(g_endian == MYLITTLE_ENDIAN) { // uhmmm I don't think it's very fast... but works
-            ret = (ret >> (u_int)1) | (u_int)((((u_int)bc >> (u_int)bp) & (u_int)1) << (u_int)(bits - 1));
+            ret = (ret >> (u64)1) | (u64)((((u64)bc >> (u64)bp) & (u64)1) << (u64)(bits - 1));
         } else {
-            ret = (ret << (u_int)1) | (u_int)((((u_int)bc << (u_int)bp) >> (u_int)7) & (u_int)1);
+            ret = (ret << (u64)1) | (u64)((((u64)bc << (u64)bp) >> (u64)7) & (u64)1);
         }
         (bp)++;
         (bp) &= 7; // leave it here
@@ -1181,7 +1345,7 @@ u_int fd_read_bits(u_int bits, u8 *bitchr, u8 *bitpos, int fd) {
 
 
 
-int fd_write_bits(u_int num, u_int bits, u8 *bitchr, u8 *bitpos, int fd) {
+int fd_write_bits(u64 num, u_int bits, u8 *bitchr, u8 *bitpos, int fd, u8 **data) {
     int     i,
             t,
             rem = 0;
@@ -1196,24 +1360,33 @@ int fd_write_bits(u_int num, u_int bits, u8 *bitchr, u8 *bitpos, int fd) {
     for(i = 0; i < bits; i++) {
         if(!bp) {
             if(rem) {
-                myfseek(fd, -1, SEEK_CUR);
-                myfputc(bc, fd);
+                if(data) {
+                    (*data)--;
+                    *(*data)++ = bc;
+                } else {
+                    myfseek(fd, -1, SEEK_CUR);
+                    myfputc(bc, fd);
+                }
                 rem = 0;
             }
-            t = myfpeek(fd); //myfgetc(fd);
+            t = data ? *(*data) : myfpeek(fd); //myfgetc(fd);
             if(t < 0) {
                 bc = 0;
-                myfputc(bc, fd);
+                if(data) {
+                    *(*data)++ = bc;
+                } else {
+                    myfputc(bc, fd);
+                }
             } else {
                 bc = t;
             }
         }
         if(g_endian == MYLITTLE_ENDIAN) { // uhmmm I don't think it's very fast... but works
-            t = (u_int)1 << (u_int)bp;
-            bit = (num >> (u_int)i) & (u_int)1;
+            t = (u64)1 << (u64)bp;
+            bit = (num >> (u64)i) & (u64)1;
         } else {
-            t = (u_int)1 << (u_int)(7 - bp);
-            bit = (num >> (u_int)((bits - i) - 1)) & 1;
+            t = (u64)1 << (u64)(7 - bp);
+            bit = (num >> (u64)((bits - i) - 1)) & 1;
         }
         if(bit) {
             bc |= t;   // put 1
@@ -1225,8 +1398,13 @@ int fd_write_bits(u_int num, u_int bits, u8 *bitchr, u8 *bitpos, int fd) {
         rem++;
     }
     if(rem) {
-        myfseek(fd, -1, SEEK_CUR);
-        myfputc(bc, fd);
+        if(data) {
+            (*data)--;
+            *(*data)++ = bc;
+        } else {
+            myfseek(fd, -1, SEEK_CUR);
+            myfputc(bc, fd);
+        }
     }
     if(bitchr) *bitchr = bc;
     if(bitpos) *bitpos = bp;
@@ -1247,7 +1425,7 @@ int bits2str(u8 *out, int outsz, int bits, u8 *bitchr, u8 *pos, int fd) {
     }
     for(o = out; bits > 0; bits -= max8) {
         if(bits < 8) max8 = bits;
-        *o++ = fd_read_bits(max8, bitchr, pos, fd);
+        *o++ = fd_read_bits(max8, bitchr, pos, fd, NULL);
     }
     return o - out;
 }
@@ -1266,7 +1444,7 @@ int str2bits(u8 *in, int insz, int bits, u8 *bitchr, u8 *pos, int fd) {
     }
     for(o = in; bits > 0; bits -= max8) {
         if(bits < 8) max8 = bits;
-        fd_write_bits(*o++, max8, bitchr, pos, fd);
+        fd_write_bits(*o++, max8, bitchr, pos, fd, NULL);
     }
     return(o - in);
 }
@@ -1276,14 +1454,15 @@ int str2bits(u8 *in, int insz, int bits, u8 *bitchr, u8 *pos, int fd) {
 int my_fdbits(int fdnum, u8 *out_bitchr, u8 *out_bitpos, u_int *out_bitoff, u8 in_bitchr, u8 in_bitpos, u_int in_bitoff) {
     if(fdnum < 0) {
         CHECK_MEMNUM(0)
+        fdnum = myabs(fdnum);   // remember that fdnum is now changed
         if(out_bitchr && out_bitpos && out_bitoff) {
-            *out_bitchr = g_memory_file[-fdnum].bitchr;
-            *out_bitpos = g_memory_file[-fdnum].bitpos;
-            *out_bitoff = g_memory_file[-fdnum].bitoff;
+            *out_bitchr = g_memory_file[fdnum].bitchr;
+            *out_bitpos = g_memory_file[fdnum].bitpos;
+            *out_bitoff = g_memory_file[fdnum].bitoff;
         } else {
-            g_memory_file[-fdnum].bitchr = in_bitchr;
-            g_memory_file[-fdnum].bitpos = in_bitpos;
-            g_memory_file[-fdnum].bitoff = in_bitoff;
+            g_memory_file[fdnum].bitchr = in_bitchr;
+            g_memory_file[fdnum].bitpos = in_bitpos;
+            g_memory_file[fdnum].bitoff = in_bitoff;
         }
     } else {
         CHECK_FILENUM
@@ -1303,6 +1482,7 @@ int my_fdbits(int fdnum, u8 *out_bitchr, u8 *out_bitpos, u_int *out_bitoff, u8 i
 
 
 int _FILEZ(int fdnum) {
+    // do not add any "fdnum < -MAX_FILES" because this work-around is currently used in filexor
     if(fdnum >= MAX_FILES) fdnum = get_var32(fdnum - MAX_FILES);
     if(g_replace_fdnum0 && !fdnum) fdnum = g_replace_fdnum0;    // this happens at runtime
     return fdnum;
@@ -1313,7 +1493,7 @@ int _FILEZ(int fdnum) {
 int myatoifile(u8 *str) {   // for quick usage
     int     fdnum   = 0;
 
-    if(str && !strnicmp(str, MEMORY_FNAME, MEMORY_FNAMESZ)) {
+    if(is_MEMORY_FILE(str)) {
         fdnum = get_memory_file(str);
     } else if(str && !strnicmp(str, "ARRAY", 5)) {
         fdnum = myatoi(str + 5);
@@ -1337,12 +1517,12 @@ quit:
 
 
 int zero_fdnum(int fdnum, u8 chr, int size) {
-    static u8   out[QUICKBMS_CACHED_IO_SIZE];
-    int t = QUICKBMS_CACHED_IO_SIZE;
-    memset(out, chr, t);
+    int     t;
+    u8      *tmp = QUICKBMS_CACHED_IO(&t);
+    memset(tmp, chr, t);
     while(size > 0) {   // skip negative size
         if(size < t) t = size;
-        if(myfw(fdnum, out, t) < 0) return -1;
+        if(myfw(fdnum, tmp, t) < 0) return -1;
         size -= t;
     }
     return 0;
@@ -1351,22 +1531,22 @@ int zero_fdnum(int fdnum, u8 chr, int size) {
 
 
 int dumpa_memory_file(memory_file_t *memfile, u8 **ret_data, int size, int *ret_size) {
-    u8      *data;
+    u8      *data   = NULL;
 
-    data = *ret_data;
+    if(ret_data) data = *ret_data;
     MAX_ALLOC_CHECK(size);
     if(g_append_mode) {
-               if(g_append_mode == APPEND_MODE_APPEND) {    // append
+               if(g_append_mode == APPEND_MODE_APPEND) {
             memfile->pos   = memfile->size;
             if((memfile->size + size) < memfile->size) ALLOC_ERR;
             memfile->size += size;
 
-        } else if(g_append_mode == APPEND_MODE_OVERWRITE) { // overwrite
+        } else if(g_append_mode == APPEND_MODE_OVERWRITE) {
             // allow goto to decide where placing the new content
             if((memfile->size + size) < memfile->size) ALLOC_ERR;
             if((memfile->pos + size) > memfile->size) memfile->size = memfile->pos + size;
 
-        } else if(g_append_mode == APPEND_MODE_BEFORE) {    // before
+        } else if(g_append_mode == APPEND_MODE_BEFORE) {
             memfile->pos   = 0;
             if((memfile->size + size) < memfile->size) ALLOC_ERR;
             memfile->size += size;
@@ -1383,23 +1563,12 @@ int dumpa_memory_file(memory_file_t *memfile, u8 **ret_data, int size, int *ret_
     // the following are the new instructions for using less memory
     if(ret_size && !memfile->data && data) {
         memfile->data = data;   // direct assignment
-        *ret_data = NULL;       // set to NULL, do NOT free!
+        if(ret_data) *ret_data = NULL;  // set to NULL, do NOT free!
         *ret_size = 0;
         goto quit;
     }
 
-    if((u_int)memfile->size > (u_int)memfile->maxsize) {
-        memfile->maxsize = memfile->size;
-        MAX_ALLOC_CHECK(memfile->maxsize);
-        memfile->data = realloc(memfile->data, memfile->maxsize + 1);
-        if(!memfile->data) STD_ERR(QUICKBMS_ERROR_MEMORY);
-        memfile->data[memfile->maxsize] = 0;
-    } else if(!memfile->data && !memfile->maxsize) {    // avoids some rare problems in some rare cases
-        MAX_ALLOC_CHECK(memfile->maxsize);
-        memfile->data = realloc(memfile->data, memfile->maxsize + 1);
-        if(!memfile->data) STD_ERR(QUICKBMS_ERROR_MEMORY);
-        memfile->data[memfile->maxsize] = 0;
-    }
+    myalloc(&memfile->data, memfile->size, &memfile->maxsize);
     if(g_append_mode == APPEND_MODE_BEFORE) {
         mymemmove(memfile->data + size, memfile->data, memfile->size - size);
     }
@@ -1411,11 +1580,6 @@ int dumpa_memory_file(memory_file_t *memfile, u8 **ret_data, int size, int *ret_
         if(g_append_mode) memfile->pos += size;
     }
 quit:
-    if(memfile->data) {
-        // not needed, it's for a possible future usage or something else
-        //memfile->data[memfile->pos + size] = 0;
-        memfile->data[memfile->size] = 0;
-    }
     return size;
 }
 
@@ -1512,14 +1676,10 @@ redo:
 
 // log to file happens only here
 int dumpa_direct_copy(int fdnum, FILE *fd, u8 *out, int size, int no_compare, u8 *fname) {
-    static int  tmpsz   = 0;
-    static u8   *tmp    = NULL;
     static u8   *cname  = NULL;
 
-    struct stat xstat;
     FILE    *fdc        = NULL;
-    int     t,
-            len         = -1,
+    int     len         = -1,
             do_compare,
             cres        = 0;    // 0 means ok / same file
 
@@ -1531,9 +1691,7 @@ int dumpa_direct_copy(int fdnum, FILE *fd, u8 *out, int size, int no_compare, u8
         fdc = xfopen(cname, "rb");
         if(fdc) {
             // check file size to avoid reading the whole file
-            xstat.st_size = 0;
-            fstat(fileno(fdc), &xstat);
-            if(xstat.st_size != size) { // no need to use goto
+            if(filesize(fdc) != size) { // no need to use goto
                 FCLOSE(fdc);
                 cres = -1;
             }
@@ -1553,16 +1711,7 @@ int dumpa_direct_copy(int fdnum, FILE *fd, u8 *out, int size, int no_compare, u8
         }
     } else {
         // direct copy
-        if(!tmp) {
-            tmpsz = QUICKBMS_CACHED_IO_SIZE;
-            tmp = malloc(tmpsz);
-            if(!tmp) STD_ERR(QUICKBMS_ERROR_MEMORY);
-        }
-        for(len = 0; len < size; len += t) {
-            t = tmpsz;
-            if((size - len) < t) t = size - len;
-            t = myfr(fdnum, tmp, t, TRUE);
-            if(t <= 0) break;
+        TMP_FILE_READ(myfr, fdnum, break)
             if(do_compare) {
                 if(fdc) {
                     cres = file_compare(fdc, tmp, t);
@@ -1590,7 +1739,7 @@ int dumpa_direct_copy(int fdnum, FILE *fd, u8 *out, int size, int no_compare, u8
 
 
 
-static inline void dumpa_state(int *quickbms_compression, int *quickbms_encryption, int zsize, int size, int xsize) {
+static void dumpa_state(int *quickbms_compression, int *quickbms_encryption, int zsize, int size, int xsize) {
     // notes:
     // encryption uses only the output buffer: memory = file_size
     // compression uses both input and output: memory = file_size * 2 (at least)
@@ -1620,7 +1769,7 @@ int CMD_Encryption_func(int cmd, int invert_mode);
                     /* skip boring message */ \
                 } else { \
                     fprintf(stderr, \
-                        "       the reimport option acts as a reinjector, thereforey ou cannot insert a\n" \
+                        "       the reimport option acts as a reinjector, therefore you cannot insert a\n" \
                         "       file if it's larger than the original for not overwriting the rest of\n" \
                         "       the archive which cannot be loaded correctly:\n"); \
                 } \
@@ -1691,6 +1840,18 @@ int CMD_FileXOR_func(int cmd);
 
 
 
+void dumpa_skip_reimported_files(void) {
+    static int  reimport_skip_progress_idx = 0;
+    static char reimport_skip_progress[] = "|/-\\|/-\\";
+    g_reimported_files_404++;
+    if(!reimport_skip_progress[reimport_skip_progress_idx]) reimport_skip_progress_idx = 0;
+    fputc(reimport_skip_progress[reimport_skip_progress_idx], stderr);
+    fputc('\r', stderr);
+    reimport_skip_progress_idx++;
+}
+
+
+
 variable_reimport_t *dumpa_reimport2_valid(int idx) {
     variable_reimport_t *ret;
     if(idx < 0) return NULL;
@@ -1720,13 +1881,17 @@ int dumpa_reimport2(int idx, int value) {
         add_var(idx, NULL, NULL, value, sizeof(int));
     }
 
-    oldoff = myftell(reimport->fd);
-    int g_filexor_cmd_bck = g_filexor.cmd;
-    if(reimport->use_filexor != g_filexor.cmd) CMD_FileXOR_func(reimport->use_filexor); // set
-    myfseek(reimport->fd, reimport->offset, SEEK_SET);
-    myfwx(reimport->fd, idx, reimport->type);
-    if(g_filexor_cmd_bck     != g_filexor.cmd) CMD_FileXOR_func(g_filexor_cmd_bck);     // reset
-    myfseek(reimport->fd, oldoff, SEEK_SET);
+    if(reimport->type == BMS_TYPE_ASIZE) {
+        // do nothing, it happens with -r -r -r -w
+    } else {
+        oldoff = myftell(reimport->fd);
+        int g_filexor_cmd_bck = g_filexor.cmd;
+        if(reimport->use_filexor != g_filexor.cmd) CMD_FileXOR_func(reimport->use_filexor); // set
+        myfseek(reimport->fd, reimport->offset, SEEK_SET);
+        myfwx(reimport->fd, idx, reimport->type);
+        if(g_filexor_cmd_bck     != g_filexor.cmd) CMD_FileXOR_func(g_filexor_cmd_bck);     // reset
+        myfseek(reimport->fd, oldoff, SEEK_SET);
+    }
 
     if(reimport->math_ops > 0) {
         add_var(idx, NULL, NULL, value, sizeof(int));
@@ -1738,27 +1903,88 @@ int dumpa_reimport2(int idx, int value) {
 
 
 
+int g_ignore_comp_errors_reimport(int endif_cmd, int size) {
+    int     cmd;
+    if(endif_cmd < 0) {
+        cmd = g_last_cmd;
+    } else {
+        cmd = endif_cmd;
+    }
+
+    int     is_else = 0;
+    int     is_log  = 0;
+
+    while(--cmd >= 0) {
+        if((CMD.type == CMD_If) || (CMD.type == CMD_Elif)) {
+            if(endif_cmd >= 0) {
+                if(CMD.type == CMD_If) break;
+                continue;
+            }
+            if(!is_log) continue;
+            if(VARISNUM(0) && VARISNUM(2)) {
+                int var1n = VAR32(0);
+                int var1x = CMD.var[0];
+                u8  *cond = STR(1);
+                int var2n = VAR32(2);
+                int var2x = CMD.var[2];
+
+                if(
+                    (strstr(cond, "<>") || strstr(cond, "!="))  // different
+                 || strstr(cond, "<")   // lower
+                 || strstr(cond, ">")   // higher
+                 || strstr(cond, "=")   // equal (last)
+                ) {
+                    if(var_is_a_constant(var1x)) {
+                        if(is_else) {
+                            //ok
+                        } else {
+                            var1n = size;
+                        }
+                        dumpa_reimport2(var2x, var1n);
+
+                    } else if(var_is_a_constant(var2x)) {
+                        if(is_else) {
+                            //ok
+                        } else {
+                            var2n = size;
+                        }
+                        dumpa_reimport2(var1x, var2n);
+
+                    } else {
+                        //if(is_else) { // same???
+                        if((var1x != g_reimport2_zsize) && (var1x != g_reimport2_size) && (var1x != g_reimport2_xsize)) {
+                            dumpa_reimport2(var1x, size);
+                        }
+                        if((var2x != g_reimport2_zsize) && (var2x != g_reimport2_size) && (var2x != g_reimport2_xsize)) {
+                            dumpa_reimport2(var2x, size);
+                        }
+                    }
+                }
+            }
+            break;
+        } else if(CMD.type == CMD_Else) {
+            is_else = 1;
+        } else if(CMD.type == CMD_EndIf) {
+            cmd = g_ignore_comp_errors_reimport(cmd, size);
+        } else if(CMD.type == CMD_Log) {
+            is_log = 1;
+        }
+    }
+    return cmd;
+}
+
+
+
 void dumpa_sha1(int fdnum, u8 *data, int size, u8 *ret) {
-    static int  tmpsz   = 0;
-    static u8   *tmp    = NULL;
     struct sha1_ctx hash_ctx;
 
     hs_cryptohash_sha1_init(&hash_ctx);
     if(data) {
         if(size > 0) hs_cryptohash_sha1_update(&hash_ctx, data, size);
     } else {
-        int t, len;
         // direct copy
-        if(!tmp) {
-            tmpsz = QUICKBMS_CACHED_IO_SIZE;
-            tmp = malloc(tmpsz);
-            if(!tmp) STD_ERR(QUICKBMS_ERROR_MEMORY);
-        }
-        for(len = 0; len < size; len += t) {
-            t = tmpsz;
-            if((size - len) < t) t = size - len;
-            t = myfr(fdnum, tmp, t, TRUE);
-            if(t <= 0) break;
+        int     len;
+        TMP_FILE_READ(myfr, fdnum, break)
             hs_cryptohash_sha1_update(&hash_ctx, tmp, t);
         }
     }
@@ -1788,15 +2014,11 @@ int dumpa_shrink_enlarge(int fdnum, u_int oldoff, u_int offset, int old_size, in
             diff_size;
     u8      b;
 
-    static int  tmpsz   = 0;
-    static u8   *tmp    = NULL;
     int     t,
             len;
-    if(!tmp) {
-        tmpsz = QUICKBMS_CACHED_IO_SIZE;
-        tmp = malloc(tmpsz);
-        if(!tmp) STD_ERR(QUICKBMS_ERROR_MEMORY);
-    }
+
+    int  tmpsz   = 0;
+    u8   *tmp    = QUICKBMS_CACHED_IO(&tmpsz);
 
     diff_size = new_size - old_size;
     if(!diff_size) return 0;
@@ -1841,10 +2063,14 @@ int dumpa_shrink_enlarge(int fdnum, u_int oldoff, u_int offset, int old_size, in
     int i;
     for(i = 0; i < MAX_VARS; i++) {
         if(!g_variable[i].name) break;
-        if((g_variable[i].reimport.fd == fdnum) && (g_variable[i].reimport.type == BMS_TYPE_ASIZE)) {
-            int tmpn = 0, error = 0;
-            myfrx(fdnum, BMS_TYPE_ASIZE, &tmpn, &error);
-            if(!error) add_var(i, NULL, NULL, tmpn, sizeof(int));
+        if(g_variable[i].reimport.fd == fdnum) {
+            if(g_variable[i].reimport.type == BMS_TYPE_ASIZE) {
+                //add_var(i, NULL, NULL, get_var32(i) + diff_size, sizeof(int));
+                int tmpn = 0, error = 0;
+                myfrx(fdnum, BMS_TYPE_ASIZE, &tmpn, &error);
+                if(!error) add_var(i, NULL, NULL, tmpn, sizeof(int));
+            }
+            // ready to add others
         }
     }
 
@@ -1853,7 +2079,21 @@ int dumpa_shrink_enlarge(int fdnum, u_int oldoff, u_int offset, int old_size, in
 
 
 
-int dumpa_slog(int fdnum, u8 *fname, u_int offset /*-1 is u_int*/, int size, int type) {
+int dumpa_slog_write(FILE *fd, int fdmem, u8 *str, int len) {
+    if(!str) str = "";
+    if(len < 0) len = strlen(str);
+
+    if(fd) {
+        if(fwrite(     str, 1, len, fd) != len) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+    } else {
+        if(myfw(fdmem, str,    len    ) != len) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+    }
+    return 0;
+}
+
+
+
+int dumpa_slog(int fdnum, u8 *fname, u_int offset /*-1 is u_int*/, int size, int type, int id_var) {
 
 /*
 When "size" is negative (NULL-delimited strings) and it's an unicode string
@@ -1902,13 +2142,10 @@ this specific situation.
             *p,
             *fname_alloc    = NULL;
 
-    inline void dumpa_slog_info(void) {
-        int     tlen = len;
-        if(tlen > 70) tlen = 70;
-        if(!g_quiet) {
-            //printf("%c %s (line %d): %*s\n", g_reimport ? '>' : '<', fname, slog_file[slog_idx].lines, (i32)tlen, out);
-            printf("%c %d: %*s%s\n", g_reimport ? '>' : '<', slog_file[slog_idx].lines, (i32)tlen, out, (tlen == len) ? "" : "...");
-        }
+    #define dumpa_slog_info(void) { \
+        if(!g_quiet) { \
+            printf("%c %d: %*s%s\n", g_reimport ? '>' : '<', slog_file[slog_idx].lines, (i32)MIN(70,len), out, (len <= 70) ? "" : "..."); \
+        } \
     }
 
     if(!fname) return -1;
@@ -1954,21 +2191,53 @@ this specific situation.
         myfseek(fdnum, offset, SEEK_SET);
     }
 
+    // fdmem must be negative if it's valid
+    int     fdmem = MAX_FILES;
+    if(is_MEMORY_FILE(fname)) {
+        fdmem = get_memory_file(fname);
+    }
+
+    g_slog_id++;    // it starts from zero so it's now 1
+    u8  *id         = NULL;
+    if(id_var >= 0) {
+        p = get_varname(id_var);
+        if(!p) p = "";  // impossible, ever valid
+        if(!p[0]) {
+            // nothing to do, we use g_slog_id
+        } else {
+            id = get_var(id_var);
+            if(!id) id = "";
+        }
+    }
+
     if(g_reimport) {
 
         if(fdnum < 0) {
             fprintf(stderr, "- MEMORY_FILEs cannot be used for strings editing, reimporting anyway\n");
         }
 
-        fname = create_dir(fname, 0, 0, 0, 1);  // needed to avoid xfopen("/file.txt", "rb");
-        fd = xfopen(g_force_output ? g_force_output : fname, "rb");
-        if(!fd) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+        if(fdmem >= 0) {
+            fname = create_dir(fname, 0, 0, 0, 1);  // needed to avoid xfopen("/file.txt", "rb");
+            fd = xfopen(g_force_output ? g_force_output : fname, "rb");
+            if(!fd) {
+                //STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+                dumpa_skip_reimported_files();
+                goto quit_ok;
+            }
+        } else {
+            myfseek(fdmem, 0, SEEK_SET);
+        }
         // g_force_output_pos is not used here because slog_file[slog_idx].offset already does that job
 
         if(!slog_file[slog_idx].offset) {
             // currently this is totally useless and unsupported, only UTF-8 works
             u8  bom[3] = "";
-            if(fread(bom, 1, 3, fd) == 3) {
+            if(fd) {
+                t = fread(bom, 1, 3, fd);
+            } else {
+                t = myfr(fdmem, bom, 3, FALSE);
+            }
+            if(t == 3) {
                 if(!memcmp(bom, "\xef\xbb\xbf", 3)) {       // UTF-8 BOM
                     slog_file[slog_idx].offset = 3;
                     slog_file[slog_idx].utf16 = 0;
@@ -1983,17 +2252,40 @@ this specific situation.
             // no need to reset fseek
         }
 
-        if(fseek(fd, slog_file[slog_idx].offset, SEEK_SET) < 0) goto quit;
         // endianess is automatically handled by incremental_fread
-        allocated_out = out = incremental_fread(fd, &len, 1, NULL, 0, slog_file[slog_idx].utf16);
+        if(fd) {
+            if(fseek(fd, slog_file[slog_idx].offset, SEEK_SET) < 0) goto quit;
+            out = incremental_fread(fd, &len, 1, NULL, 0, slog_file[slog_idx].utf16);
+        } else {
+            if(myfseek(fdmem, slog_file[slog_idx].offset, SEEK_SET) < 0) goto quit;
+            datafile_t df;
+            if(datafile_init(&df, myfdata(fdmem) + myftell(fdmem), myfilesize(fdmem) - myftell(fdmem)) < 0) {
+                STD_ERR(QUICKBMS_ERROR_MEMORY);
+            }
+            out = incremental_fread(NULL, &len, 1, &df, 0, slog_file[slog_idx].utf16);
+        }
+        allocated_out = out;
         if(!out) goto quit;
-        dumpa_slog_info();
+
+        if(id_var >= 0) {
+            p = strchr(out, '=');
+            if(!p) goto quit_ok;
+            *p++ = 0;
+            if(id) {
+                if(stricmp(out, id)) goto quit_ok;
+            } else {
+                if(myatoi(out) != g_slog_id) goto quit_ok;
+            }
+            out = p;
+        }
+
+        dumpa_slog_info()
 
         slog_file[slog_idx].lines++;
-        slog_file[slog_idx].offset = ftell(fd);
+        slog_file[slog_idx].offset = fd ? ftell(fd) : myftell(fdmem);
         //FCLOSE(fd);
 
-        len = cstring(out, out, len, NULL);
+        len = cstring(out, out, len, NULL, NULL);
 
         // necessary and good for debugging so you can check it at any time
         add_var(slog_var, NULL, out, 0, len);
@@ -2132,7 +2424,11 @@ this specific situation.
 
         if(data) {
             while((size > 0) && !data[size - 1]) size--;    // remove possible useless 0x00 at the end, they will be recreated by the reimporter
-            out = string_to_C(data, size, &len);
+            if(type == BMS_TYPE_BINARY) {
+                out = string_to_C(data, size, &len, 1);
+            } else {
+                out = string_to_C(data, size, &len, 0);
+            }
         } else {
             len = sprintf(tmp, "%"PRId"", datan);
             out = tmp;
@@ -2140,57 +2436,97 @@ this specific situation.
         if(!out) goto quit;
 
         if(!g_list_only && !g_void_dump) {
-            fname = create_dir(fname, 1, 0, 0, 1);
+            if(fdmem >= 0) {
+                fname = create_dir(fname, 1, 0, 0, 1);
+            }
             if(!slog_file[slog_idx].lines) {    // first line, create the file
-                if(check_overwrite(fname, 0) < 0) {
-                    fprintf(stderr, "- the file will not be exported (auto renaming not allowed in Slog)\n");
-                    goto quit;
+                if(fdmem >= 0) {
+                    if(check_overwrite(fname, 0) < 0) {
+                        fprintf(stderr, "- the file will not be exported (auto renaming not allowed in Slog)\n");
+                        goto quit;
+                    }
+                    fd = xfopen(fname, "wb");
+                    if(!fd) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+                } else {
+                    dumpa_memory_file(&g_memory_file[-fdmem], NULL, 0, NULL);
                 }
-                fd = xfopen(fname, "wb");
-                if(!fd) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
                 // the UTF-8 BOM is not necessary
                 if(g_force_utf16 < 0) {
-                    if(fwrite("\xff\xfe", 1, 2, fd) != 2) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);   // UTF-16 LE
+                    if(fd) t = fwrite(     "\xff\xfe", 1, 2, fd);
+                    else   t = myfw(fdmem, "\xff\xfe",    2);
+                    if(t != 2) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);   // UTF-16 LE
                 } else if(g_force_utf16 > 0) {
-                    if(fwrite("\xfe\xff", 1, 2, fd) != 2) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);   // UTF-16 BE
+                    if(fd) t = fwrite(     "\xfe\xff", 1, 2, fd);
+                    else   t = myfw(fdmem, "\xfe\xff",    2);
+                    if(t != 2) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);   // UTF-16 BE
                 } else {
-                    //if(fwrite("\xef\xbb\xbf", 1, 3, fd) != 3) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);   // UTF-8 BOM
+                    /*
+                    if(fd) t = fwrite(     "\xef\xbb\xbf", 1, 3, fd);
+                    else   t = myfw(fdmem, "\xef\xbb\xbf",    3);
+                    if(t != 3) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);   // UTF-8 BOM
+                    */
                 }
             } else {
-                fd = xfopen(fname, "ab");
-                if(!fd) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+                if(fdmem >= 0) {
+                    fd = xfopen(fname, "ab");
+                    if(!fd) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+                } else {
+                    // reset if not open yet
+                    if(!g_memory_file[-fdmem].data) {
+                        dumpa_memory_file(&g_memory_file[-fdmem], NULL, 0, NULL);
+                    }
+                }
             }
 
-            u8  *o16;
+            u8  *o16;   // static
             int o16_len;
             endian_bck = g_endian;
             if(g_force_utf16 < 0) {         // UTF-16 LE
                 g_endian = MYLITTLE_ENDIAN;
-                o16 = set_utf8_to_unicode(out, len, &o16_len);  // static
-                if(fwrite(o16,    1, o16_len, fd) != o16_len) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
-                if(fwrite("\r\0", 1, 2,   fd) != 2)   STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
-                if(fwrite("\n\0", 1, 2,   fd) != 2)   STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+
+                if(id_var >= 0) {
+                    p = id ? id : myitoa(g_slog_id);
+                    o16 = set_utf8_to_unicode(p, -1,    &o16_len);
+                    dumpa_slog_write(fd, fdmem, o16,    o16_len);
+                    dumpa_slog_write(fd, fdmem, "=\0",  2);
+                }
+                o16 = set_utf8_to_unicode(out, len,     &o16_len);
+                dumpa_slog_write(fd, fdmem, o16,        o16_len);
+                dumpa_slog_write(fd, fdmem, "\r\0\n\0", 4);
 
             } else if(g_force_utf16 > 0) {  // UTF-16 BE
                 g_endian = MYBIG_ENDIAN;
-                o16 = set_utf8_to_unicode(out, len, &o16_len);  // static
-                if(fwrite(o16,    1, o16_len, fd) != o16_len) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
-                if(fwrite("\0\r", 1, 2,   fd) != 2)   STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
-                if(fwrite("\0\n", 1, 2,   fd) != 2)   STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+
+                if(id_var >= 0) {
+                    p = id ? id : myitoa(g_slog_id);
+                    o16 = set_utf8_to_unicode(p, -1,    &o16_len);
+                    dumpa_slog_write(fd, fdmem, o16,    o16_len);
+                    dumpa_slog_write(fd, fdmem, "\0=",  2);
+                }
+                o16 = set_utf8_to_unicode(out, len,     &o16_len);
+                dumpa_slog_write(fd, fdmem, o16,        o16_len);
+                dumpa_slog_write(fd, fdmem, "\0\r\0\n", 4);
 
             } else {
-                if(fwrite(out,    1, len, fd) != len) STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
-                if(fwrite("\r\n", 1, 2,   fd) != 2)   STD_ERR(QUICKBMS_ERROR_FILE_WRITE);
+
+                if(id_var >= 0) {
+                    p = id ? id : myitoa(g_slog_id);
+                    dumpa_slog_write(fd, fdmem, p,      -1);
+                    dumpa_slog_write(fd, fdmem, "=",    1);
+                }
+                dumpa_slog_write(fd, fdmem, out,        len);
+                dumpa_slog_write(fd, fdmem, "\r\n",     2);
+
             }
             g_endian = endian_bck;
 
-            slog_file[slog_idx].offset = ftell(fd);
+            slog_file[slog_idx].offset = fd ? ftell(fd) : myftell(fdmem);
             //FCLOSE(fd);
         }
         slog_file[slog_idx].lines++;
 
         add_var(slog_var, NULL, out, 0, len);
-        dumpa_slog_info();
+        dumpa_slog_info()
     }
 
 quit_ok:
@@ -2279,9 +2615,10 @@ int dumpa_reimport_compression(int type) {
             if(num >= 0) {
                 quickbms_comp_list[i].reimport = num;
             } else {
-                u8  tmp[strlen(name) + 32 + 1];
+                u8  *tmp = alloca(strlen(name) + 32 + 1);
+                if(!tmp) STD_ERR(QUICKBMS_ERROR_MEMORY);
                 if(!strcmpx(name, "_COMPRESS")) {
-                    sprintf(tmp, "%.*s", (u8*)strrchr(name, '_') - name, name);
+                    sprintf(tmp, "%.*s", (i32)((u8*)strrchr(name, '_') - name), name);
                 } else {
                     sprintf(tmp, "%s%s", name, "_COMPRESS");
                 }
@@ -2298,6 +2635,28 @@ int dumpa_reimport_compression(int type) {
     if((type < 0) || (type >= COMP_ERROR)) return -1;
     if(type >= COMP_NONE_COMPRESS) return type; // nothing to do, necessary for zlib/deflate super compression with zopfli and uberflate
     return quickbms_comp_list[type].reimport;
+}
+
+
+
+static extracted_file_t *append_mode_extracted_file2(u8 *FNAME, FILE *fd, int zsize, int size) {
+    extracted_file_t *ef    = NULL;
+    if(g_script_uses_append || (g_extracted_file_tree_view_mode >= 0)) {
+        HASH_FIND_STR(g_extracted_file, FNAME, ef);
+        if(!ef) {
+            ef = real_calloc(1, sizeof(extracted_file_t));
+            if(!ef) STD_ERR(QUICKBMS_ERROR_MEMORY);
+            ef->id      = g_reimport ? g_reimported_files : g_extracted_files;
+            ef->name    = real_malloc(strlen(FNAME) + 1);
+            if(fd) ef->offset  = ftell(fd); // first only
+            strcpy(ef->name, FNAME);
+            HASH_ADD_STR(g_extracted_file, name, ef);
+            CDL_APPEND(g_extracted_file, ef);
+        }
+        ef->zsize   += zsize;
+        ef->size    += size;
+    }
+    return ef;
 }
 
 
@@ -2340,28 +2699,8 @@ int dumpa(int fdnum, u8 *fname, u8 *varname, u_int offset, int size, int zsize, 
         last_name_crc = mycrc(fname, -1); \
     }
 
-extracted_file_t *append_mode_extracted_file2(u8 *FNAME, FILE *fd) {
-    extracted_file_t *ef    = NULL;
-    if(g_script_uses_append || (g_extracted_file_tree_view_mode >= 0)) {
-        HASH_FIND_STR(g_extracted_file, FNAME, ef);
-        if(!ef) {
-            ef = real_calloc(1, sizeof(extracted_file_t));
-            if(!ef) STD_ERR(QUICKBMS_ERROR_MEMORY);
-            ef->id      = g_reimport ? g_reimported_files : g_extracted_files;
-            ef->name    = real_malloc(strlen(FNAME) + 1);
-            if(fd) ef->offset  = ftell(fd); // first only
-            strcpy(ef->name, FNAME);
-            HASH_ADD_STR(g_extracted_file, name, ef);
-            CDL_APPEND(g_extracted_file, ef);
-        }
-        ef->zsize   += zsize;
-        ef->size    += size;
-    }
-    return ef;
-}
-
 #define append_mode_extracted_file(FNAME, FD, X) \
-    ef = append_mode_extracted_file2(FNAME, FD); \
+    ef = append_mode_extracted_file2(FNAME, FD, zsize, size); \
     if(ef) { \
         ef->compression = quickbms_compression; /* mah, chunks are bad */ \
         ef->encryption  = quickbms_encryption;  /* mah, chunks are bad */ \
@@ -2456,7 +2795,7 @@ extracted_file_t *append_mode_extracted_file2(u8 *FNAME, FILE *fd) {
         } else {
             // the following works but would be good to have something generic rather than based on TEMPORARY_FILE
             xname = g_filenumber[0].basename;
-            if(!stricmp(xname, TEMPORARY_FILE) && g_filenumber[0].prev_basename) xname = g_filenumber[0].prev_basename;
+            //if(!stricmp(xname, TEMPORARY_FILE) && g_filenumber[0].prev_basename) xname = g_filenumber[0].prev_basename; // old references are saved
             spr(&tmp_fname, g_decimal_names ? "%s%c%"PRIu".dat" : "%s%c%"PRIx".dat", xname, PATHSLASH, g_extracted_files);
         }
         fname = tmp_fname;
@@ -2502,7 +2841,7 @@ extracted_file_t *append_mode_extracted_file2(u8 *FNAME, FILE *fd) {
         // mem_file will be added later to skip the name check
         // do nothing
 
-    } else if(!strnicmp(varname, MEMORY_FNAME, MEMORY_FNAMESZ) && !stricmp(varname, fname)) {
+    } else if(is_MEMORY_FILE(varname) && !stricmp(varname, fname)) {
         memfile = &g_memory_file[-get_memory_file(fname)];    // yes, remember that it must be negative of negative
         if(g_verbose > 0) printf("- create a memory file from offset %"PRIx" of %"PRIu" bytes\n", offset, size);
         memfile->coverage = 0;  // reset it
@@ -2514,7 +2853,6 @@ extracted_file_t *append_mode_extracted_file2(u8 *FNAME, FILE *fd) {
 
     } else {
         pathslash_fix(fname, 1);    // necessary for quick_simple_tmpname_scanner. I'm not aware of any compatibility problem with older versions at the moment
-
         if(nametmp) {
             // handle them later
         } else {
@@ -2593,6 +2931,16 @@ extracted_file_t *append_mode_extracted_file2(u8 *FNAME, FILE *fd) {
         }
         int skip_ask_force_reimport_1   = 0;    // lame
         if(g_reimport < 0) skip_ask_force_reimport_1 = 1;
+
+        if(g_ignore_comp_errors && (g_reimport < 0)) {
+            dumpa_state(&quickbms_compression, &quickbms_encryption, zsize, size, xsize);
+            if(quickbms_compression) {
+                size  = zsize;
+                zsize = 0;
+                if(xsize > 0) xsize = (size + 15) & ~15; // wrong but no other ways
+            }
+        }
+
         backup_xsize = xsize;
         backup_zsize = zsize;
         backup_size  = size;
@@ -2691,7 +3039,9 @@ redo_import:
                 old_compression_type = g_compression_type;
                 g_compression_type = dumpa_reimport_compression(g_compression_type);
                 if(g_compression_type < 0) {
-                    fprintf(stderr, "\nError: unsupported compression %d in reimport mode\n", (i32)g_compression_type);
+                    fprintf(stderr, "\n"
+                        "Error: unsupported compression %d in reimport mode\n"
+                        "       you can try the -e option for disabling compression (experimental)\n", (i32)old_compression_type);
                     if(g_continue_anyway) { ret_value = -1; goto quit; }
                     myexit(QUICKBMS_ERROR_COMPRESSION);
                 }
@@ -2808,7 +3158,7 @@ redo_import:
                 if((new_compression_type == COMP_ZLIB_COMPRESS) || (new_compression_type == COMP_DEFLATE_COMPRESS)) {
                     if(new_compression_type == COMP_ZLIB_COMPRESS)          g_compression_type = COMP_ZOPFLI_ZLIB_COMPRESS;
                     else                                                    g_compression_type = COMP_ZOPFLI_DEFLATE_COMPRESS;
-                    fprintf(stderr, "- compressed size too big, I try using the zopfli method (may be slow)\n");
+                    fprintf(stderr, "- compressed size too big, I try using the zopfli method (may be slow)\n"); // non-extreme version of zopfli
                     myfseek(fdnum, oldoff, SEEK_SET);
                     xsize = backup_xsize;
                     zsize = backup_zsize;
@@ -2865,6 +3215,10 @@ redo_import:
                 dumpa_reimport2(g_reimport2_size,  zsize);
 
                 dumpa_reimport2(g_reimport2_xsize, zsize);  // ???
+
+                if(g_ignore_comp_errors) {
+                    g_ignore_comp_errors_reimport(-1, size);
+                }
             }
 
             g_reimported_files_skip--;  // little trick to avoid using an "ok" variable
@@ -2873,13 +3227,7 @@ skip_import:
             g_reimported_files_skip++;
             myfseek(fdnum, oldoff, SEEK_SET);
         } else {
-            g_reimported_files_404++;
-            static int  reimport_skip_progress_idx = 0;
-            static char reimport_skip_progress[] = "|/-\\|/-\\";
-            if(!reimport_skip_progress[reimport_skip_progress_idx]) reimport_skip_progress_idx = 0;
-            fputc(reimport_skip_progress[reimport_skip_progress_idx], stderr);
-            fputc('\r', stderr);
-            reimport_skip_progress_idx++;
+            dumpa_skip_reimported_files();
         }
 
     } else if(memfile && !size && !zsize && !fdnum) {
@@ -2958,7 +3306,11 @@ skip_import:
             }
         } else {
             //MAX_ALLOC_CHECK(size);
-            myalloc(&out, (xsize > size) ? xsize : size, &outsize); // + 1 is NOT necessary, do not use dumpa_xsize
+            //myalloc(&out, (xsize > size) ? xsize : size, &outsize); // + 1 is NOT necessary, do not use dumpa_xsize
+            myalloc(&out, size,  &outsize);     // this solution avoids problems with xsize zero and size negative
+            if(xsize > size) {
+                myalloc(&out, xsize, &outsize);
+            }
             if(quickbms_compression && (g_compression_type != COMP_COPY)) { // remember that the (size == zsize) check is NOT valid so can't be used in a "generic" way!
                 //MAX_ALLOC_CHECK(xsize);
                 //MAX_ALLOC_CHECK(zsize);
@@ -3117,9 +3469,9 @@ skip_import:
 
                     /*
                     used for log "" in append mode but can't really work, for example:
-                    FAIL:   log "" 0 0 ; append ; log "" 0 100 -> "00000000.dat" without guessed extension
-                    OK:    log "" 0 50 ; append ; log "" 50 50 -> "00000000.png"
-                    FAIL:                append ; log "" 0 100 -> "00000000.png" + "00000000.dat"
+                    FAIL:    log "" 0  0 ; append ; log ""  0 100 -> "00000000.dat" without guessed extension
+                    OK:      log "" 0 50 ; append ; log "" 50  50 -> "00000000.png"
+                    FAIL:                  append ; log ""  0 100 -> "00000000.png" + "00000000.dat"
                     there is no solution yet and I doubt there will be one in future.
                     */
                     if(g_append_mode == APPEND_MODE_NONE) {
@@ -3147,7 +3499,6 @@ skip_import:
             if(g_append_mode == APPEND_MODE_BEFORE) {
                 make_file_space(fd, size);
             }
-
             append_mode_extracted_file(fname, fd,
                 {
                     //ef->offset = ftell(fd);   // automatically done by the macro, let's keep the first offset only
@@ -3501,6 +3852,11 @@ u8 *myfrx(int fdnum, int type, int *ret_num, int *error) {
             if(!ret) *error = 1;
             break;
         }
+        case BMS_TYPE_EXE_FOLDER: {
+            ret  = g_exe_folder;
+            if(!ret) *error = 1;
+            break;
+        }
         case BMS_TYPE_UNICODE: {
             ret  = fgetss(fdnum, 0,    1, 0);
             if(!ret) *error = 1;
@@ -3552,7 +3908,7 @@ u8 *myfrx(int fdnum, int type, int *ret_num, int *error) {
             do {
                 c = fgetxx(fdnum, 1, error);
                 if(*error) break;
-                retn = (retn << 7) | (c & 0x7f);
+                retn = ((u_int)retn << (u_int)7) | (c & 0x7f);
             } while(c & 0x80);
             break;
         }
@@ -3565,7 +3921,7 @@ u8 *myfrx(int fdnum, int type, int *ret_num, int *error) {
             do {
                 c = fgetxx(fdnum, 1, error);
                 if(*error) break;
-                retn += ((c & 0x7f) << i);
+                retn += ((u_int)(c & 0x7f) << (u_int)i);
                 i += 7;
             } while(!(c & 0x80));
             break;
@@ -3575,7 +3931,7 @@ u8 *myfrx(int fdnum, int type, int *ret_num, int *error) {
             do {
                 c = fgetxx(fdnum, 1, error);
                 if(*error) break;
-                retn |= ((c & 0x7f) << i);
+                retn |= ((u_int)(c & 0x7f) << (u_int)i);
                 i += 7;
             } while(c & 0x80);
             break;
@@ -3618,7 +3974,7 @@ u8 *myfrx(int fdnum, int type, int *ret_num, int *error) {
                 if(*error) break;
                 t = c & 1;
                 c = c >> 1;
-                retn += c << (7 * i++);
+                retn += (u_int)c << (u_int)(7 * i++);
             }
             break;
         }
@@ -3698,6 +4054,10 @@ u8 *myfrx(int fdnum, int type, int *ret_num, int *error) {
         case BMS_TYPE_SIGNED_SHORT:        retn = fgetxx(fdnum, 2, error); if(retn & 0x8000)     retn |= -0x10000LL;       break;
         case BMS_TYPE_SIGNED_THREEBYTE:    retn = fgetxx(fdnum, 3, error); if(retn & 0x800000)   retn |= -0x1000000LL;     break;
         case BMS_TYPE_SIGNED_LONG:         retn = fgetxx(fdnum, 4, error); if(retn & 0x80000000) retn |= -0x100000000LL;   break;
+        case BMS_TYPE_PROMPT:
+            fprintf(stderr, "\n- please insert the content for the variable:\n  ");
+            ret = incremental_fread(stdin, NULL, 1, NULL, 0, 0);
+            break;
         default: {
             fprintf(stderr, "\nError: invalid datatype %d\n", (i32)type);
             myexit(QUICKBMS_ERROR_BMS);
@@ -3778,6 +4138,10 @@ int myfwx(int fdnum, int varn, int type) {
         }
         case BMS_TYPE_BMS_FOLDER: {
             retn = fputss(fdnum, g_bms_folder, -1, 0, 0, -1);
+            break;
+        }
+        case BMS_TYPE_EXE_FOLDER: {
+            retn = fputss(fdnum, g_exe_folder, -1, 0, 0, -1);
             break;
         }
         case BMS_TYPE_UNICODE: {    // NULL delimited

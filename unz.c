@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2019 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -127,7 +127,8 @@ int zax_uncompress(unsigned char *infd, int insz, unsigned char *outfd, int outs
 #include "libs/blosc/blosclz.h"
 #include "included/crush.c"
 #include "libs/liblzg/src/include/lzg.h"
-#include "libs/aplib/depacks.h"
+#include "libs/aplib/src/depacks.h"
+#include "libs/aplib/lib/coff/aplib.h"
 #include "included/xpksqsh.c"
 #include "included/unpxp.c"
 #include "included/boh.c"
@@ -252,11 +253,11 @@ int rLZV1 (unsigned char *in, unsigned char *out, int ilen, int len);
 int lzmat_decode(u8 *pbOut, u32 *pcbOut, u8 *pbIn, u32 cbIn);
 // 7z_advancecomp is used only for zlib/deflate compression on Windows and it doesn't affect the performance (memory/cpu when launched)
 //#ifdef WIN32
-int advancecomp_rfc1950(unsigned char *in, int insz, unsigned char *out, int outsz);
+int advancecomp_zlib(unsigned char *in, int insz, unsigned char *out, int outsz);
 int advancecomp_deflate(unsigned char *in, int insz, unsigned char *out, int outsz);
 int advancecomp_lzma(unsigned char *in, int insz, unsigned char *out, int outsz, int lzma_flags);
 //#else
-//    #define zlib_compress       advancecomp_rfc1950
+//    #define zlib_compress       advancecomp_zlib
 //    #define deflate_compress    advancecomp_deflate
 //    //#define lzma_compress       advancecomp_lzma
 //#endif
@@ -330,11 +331,7 @@ int unjam(unsigned char *in, int insz, unsigned char *out, int outsz);
 int unsrank(unsigned char *in, int insz, unsigned char *out, int outsz);
 int ZzUncompressBlock(unsigned char *buffer);
 int sh_DecodeBlock(unsigned char *iBlock, unsigned char *oBlock, int bSize);
-unsigned blz_depack_safe(const void *source, unsigned srclen, void *destination, unsigned depacked_length);
-unsigned blz_depack(const void *source, void *destination, unsigned depacked_length);
-unsigned blz_workmem_size(unsigned length);
-unsigned blz_max_packed_size(unsigned length);
-unsigned blz_pack(const void *source, void *destination, unsigned length, void *workmem);
+#include "libs/brieflz/include/brieflz.h"
 int unpaq6(unsigned char *in, int insz, unsigned char *out, int outsz, int levelx);
 int unppmdi(unsigned char *in, int insz, unsigned char *out, int outsz);
 int unppmdi_raw(unsigned char *in, int insz, unsigned char *out, int outsz, int SaSize, int MaxOrder, int MRMethod);
@@ -450,6 +447,18 @@ int bcm_decompress(unsigned char *in, int insz, unsigned char *out);
 int mppc_unpack(unsigned char *in, int insz, unsigned char *out, int outsz, int level);
 int mppc_pack(unsigned char *in, int insz, unsigned char *out, int outsz, int level);
 size_t ALLZ_Decode(u8** ptr_dst, u8* src, size_t srcSize);
+int ungtc(u8 *GtPtr,u8 *DestPtr);
+#include "included/unanco.c"
+int analyze_Huf8(unsigned char *infile, unsigned char *outfile /*, int file_length*/, int decoded_length);
+int analyze_LZH8(unsigned char *infile, unsigned char *outbuf /*, long file_length*/, int uncompressed_length);
+int romchiu(unsigned char *infile, int infile_size, unsigned char *out_buf, int nominal_size);
+
+
+
+u64 fd_read_bits(QUICKBMS_u_int bits, u8 *bitchr, u8 *bitpos, QUICKBMS_int fd, u8 **data);
+QUICKBMS_int fd_write_bits(u64 num, QUICKBMS_u_int bits, u8 *bitchr, u8 *bitpos, QUICKBMS_int fd, u8 **data);
+#define UNZBITS(X,Y)    fd_read_bits(Y, &bitchr, &bitpos, 0, &X)
+#define DOZBITS(X,Y,Z)  fd_write_bits(Z, Y, &bitchr, &bitpos, 0, &X)
 
 
 
@@ -797,6 +806,31 @@ ZIP_BASE(deflate_compress, -15)
 
 
 
+static z_stream *UNZIP_BASE_INIT(int WBITS) {
+    z_stream *z;
+    z = calloc(sizeof(z_stream), 1);
+    if(!z) STD_ERR(QUICKBMS_ERROR_MEMORY);
+    memset(z, 0, sizeof(z_stream));
+    if(inflateInit2(z, WBITS)) {
+        fprintf(stderr, "\nError: zlib initialization error\n");
+        STD_ERR(QUICKBMS_ERROR_COMPRESSION);
+    }
+    return z;
+}
+
+static int UNZIP_BASE_DICTIONARY(z_stream *z) {
+    int sync = Z_FINISH;
+    if(g_comtype_dictionary) {
+        if((g_comtype_dictionary_len >= sizeof(define_Z_FULL_FLUSH)) && !memcmp(g_comtype_dictionary, define_Z_FULL_FLUSH, sizeof(define_Z_FULL_FLUSH))) {
+            sync = Z_FULL_FLUSH;
+            if(g_comtype_dictionary_len > sizeof(define_Z_FULL_FLUSH)) inflateSetDictionary(z, g_comtype_dictionary + sizeof(define_Z_FULL_FLUSH), g_comtype_dictionary_len - sizeof(define_Z_FULL_FLUSH));
+        } else {
+            inflateSetDictionary(z, g_comtype_dictionary, g_comtype_dictionary_len);
+        }
+    }
+    return sync;
+}
+
 #define UNZIP_BASE(NAME,WBITS) \
 int NAME(u8 *in, int insz, u8 *out, int outsz, int no_error) { \
     static z_stream *z  = NULL; \
@@ -812,25 +846,11 @@ int NAME(u8 *in, int insz, u8 *out, int outsz, int no_error) { \
         return -1; \
     } \
     \
-    if(!z) { \
-        z = calloc(sizeof(z_stream), 1); \
-        if(!z) return -1; \
-        memset(z, 0, sizeof(z_stream)); \
-        if(inflateInit2(z, WBITS)) { \
-            fprintf(stderr, "\nError: zlib initialization error\n"); \
-            return -1; \
-        } \
-    } \
+    if(!z) z = UNZIP_BASE_INIT(WBITS); \
+    \
     inflateReset(z); \
     \
-    if(g_comtype_dictionary) { \
-        if((g_comtype_dictionary_len >= sizeof(define_Z_FULL_FLUSH)) && !memcmp(g_comtype_dictionary, define_Z_FULL_FLUSH, sizeof(define_Z_FULL_FLUSH))) { \
-            sync = Z_FULL_FLUSH; \
-            if(g_comtype_dictionary_len > sizeof(define_Z_FULL_FLUSH)) inflateSetDictionary(z, g_comtype_dictionary + sizeof(define_Z_FULL_FLUSH), g_comtype_dictionary_len - sizeof(define_Z_FULL_FLUSH)); \
-        } else { \
-            inflateSetDictionary(z, g_comtype_dictionary, g_comtype_dictionary_len); \
-        } \
-    } \
+    sync = UNZIP_BASE_DICTIONARY(z); \
     \
     z->next_in   = in; \
     z->avail_in  = insz; \
@@ -843,18 +863,29 @@ int NAME(u8 *in, int insz, u8 *out, int outsz, int no_error) { \
     } \
     return z->total_out; \
 }
-UNZIP_BASE(unzip_zlib,    15)
+UNZIP_BASE(unzip_zlib,     15)
 UNZIP_BASE(unzip_deflate, -15)
 
 
 
 int unzip_dynamic(u8 *in, int insz, u8 **ret_out, int *ret_outsz, int fixed_wbits) {
-    z_stream z;
+    static z_stream *z_zlib     = NULL;
+    static z_stream *z_deflate  = NULL;
+    z_stream *z = NULL;
     int     err,
             retsz,
             addsz,
             wbits,
-            retry;
+            retry,
+            sync = Z_FINISH;
+
+    if(!z_zlib && !z_deflate) {
+        z_zlib    = UNZIP_BASE_INIT( 15);
+        z_deflate = UNZIP_BASE_INIT(-15);
+    }
+
+    int tmp_ret_outsz = 0;
+    if(!ret_outsz) ret_outsz = &tmp_ret_outsz;
 
     if(fixed_wbits) {
         wbits = fixed_wbits;
@@ -868,27 +899,26 @@ int unzip_dynamic(u8 *in, int insz, u8 **ret_out, int *ret_outsz, int fixed_wbit
 
     retry = 0;
 redo:
-    memset(&z, 0, sizeof(z_stream));
-    if(inflateInit2(&z, wbits)) {
-        fprintf(stderr, "\nError: zlib initialization error\n");
-        return -1;
-    }
+    z = (wbits >= 0) ? z_zlib : z_deflate;
+    inflateReset(z);
+
+    sync = UNZIP_BASE_DICTIONARY(z);
 
     addsz = insz / 4;
     if(!addsz) addsz = insz;
     not_ret_out_boh
 
     retsz = 0;
-    z.next_in  = in;
-    z.avail_in = insz;
-    while(z.avail_in) {
-        z.next_out  = *ret_out + retsz;
-        z.avail_out = *ret_outsz - retsz;
-        err = inflate(&z, Z_FINISH);
-        retsz = (u8 *)z.next_out - *ret_out;
+    z->next_in  = in;
+    z->avail_in = insz;
+    while(z->avail_in) {
+        z->next_out  = *ret_out + retsz;
+        z->avail_out = *ret_outsz - retsz;
+        err = inflate(z, sync);
+        retsz = (u8 *)z->next_out - *ret_out;
         if(err == Z_STREAM_END) break;
-        if(((err == Z_OK) && z.avail_in) || (err == Z_BUF_ERROR)) {
-            if(!z.avail_out) myalloc(ret_out, *ret_outsz + addsz, ret_outsz);
+        if(((err == Z_OK) && z->avail_in) || (err == Z_BUF_ERROR)) {
+            if(!z->avail_out) myalloc(ret_out, *ret_outsz + addsz, ret_outsz);
         } else {
             //if(retsz <= 0) {
                 //printf("\nError: invalid zlib compressed data (%d)\n", err);
@@ -897,7 +927,7 @@ redo:
             break;
         }
     }
-    inflateEnd(&z);
+
     if(retsz < 0) {
         if(!fixed_wbits) {
             if(wbits > 0) { // zlib->deflate
@@ -914,6 +944,37 @@ redo:
     }
     return retsz;
 }
+
+
+
+#if defined(_X86_) && defined(WIN32)    // let's use libdeflate on Windows only, the Makefile is left untouched
+#include "libs/libdeflate/libdeflate.h"
+int libdeflate_compress(int wbits, u8 *in, int insz, u8 *out, int outsz) {
+    int     ret;
+    struct libdeflate_compressor    *ctx;
+    ctx = libdeflate_alloc_compressor(12);  // maximum
+    if(!ctx) ctx = libdeflate_alloc_compressor(9);
+    if(!ctx) return -1;
+    if(wbits < 0) {
+        ret = libdeflate_deflate_compress(ctx, in, insz, out, outsz);
+    } else {
+        ret = libdeflate_zlib_compress   (ctx, in, insz, out, outsz);
+    }
+    libdeflate_free_compressor(ctx);
+    if(!ret) ret = -1;  // ret is zero in case of errors
+    return ret;
+}
+#else
+int libdeflate_compress(int wbits, u8 *in, int insz, u8 *out, int outsz) {
+    int     ret;
+    if(wbits < 0) {
+        ret = advancecomp_deflate(in, insz, out, outsz);
+    } else {
+        ret = advancecomp_zlib   (in, insz, out, outsz);
+    }
+    return ret;
+}
+#endif
 
 
 
@@ -1053,7 +1114,6 @@ int unbzip2_file(u8 *in, int insz, u8 **ret_out, int *ret_outsz) { // no reset i
 u32 swap32be(u32 n);
 u32 swap32le(u32 n);
 int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
-#ifdef WIN32
     typedef VOID*                       XMEMDECOMPRESSION_CONTEXT;
     typedef enum _XMEMCODEC_TYPE {
         XMEMCODEC_DEFAULT =             0,
@@ -1064,6 +1124,8 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
         DWORD WindowSize;
         DWORD CompressionPartitionSize;
     } XMEMCODEC_PARAMETERS_LZX;
+
+#ifdef WIN32
     HRESULT WINAPI XMemCreateDecompressionContext(
         XMEMCODEC_TYPE                  CodecType,
         CONST VOID*                     pCodecParams,
@@ -1089,6 +1151,7 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
     VOID WINAPI XMemDestroyDecompressionContext(
         XMEMDECOMPRESSION_CONTEXT       Context
     );
+#endif
 
     //#define XCOMPRESS_FILE_IDENTIFIER_LZXTDECODE        0x0FF512ED
     #pragma pack(2)
@@ -1177,12 +1240,14 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
             param.Flags = 0;
             param.WindowSize = 1 << ((Flags & 0xf) + 0xf);
             param.CompressionPartitionSize = 0;
+#ifdef WIN32
             hr = XMemCreateDecompressionContext(
                 XMEMCODEC_DEFAULT,
                 &param,
                 0x80000000,
                 &ctx);
             if(hr != S_OK) { ret = -1; goto quit; }
+#endif
 
             int     extract;
             u8      *backup_in = in;
@@ -1196,7 +1261,7 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
                     if(BitsPerSize & 31) {
                         bits = (bits + BitsPerSize) & 31;
                         if((bits > 0) && (bits <= BitsPerSize)) {
-                            num = swap(QUICK_GETi32(in, 0));
+                            num = swap(QUICK_GETi32(in));
                             in += 4;
                         } else {
                             num = old;
@@ -1205,7 +1270,7 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
                         UncompressedBlockSize = (num >> (32 - bits)) | (old << bits);
                         old = num & ((1 << (32 - bits)) - 1);
                     } else {
-                        UncompressedBlockSize = swap(QUICK_GETi32(in, 0));
+                        UncompressedBlockSize = swap(QUICK_GETi32(in));
                         in += 4;
                     }
                     if(!extract) {
@@ -1216,7 +1281,11 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
                             if(p > inl) { ret = -1; goto quit; }
                             t = UncompressedBlockSize - Offset;
                             if(t > CompressedBlockSize) t = CompressedBlockSize;
+#ifdef WIN32
                             hr = XMemDecompressSegmentTD(ctx, *ret_out + ret, &t, p, CompressedBlockSize - (p - segment), UncompressedBlockSize, Offset);
+#else
+                            hr = -1;    // unsupported
+#endif
                             if(hr != S_OK) { ret = -1; goto quit; }
                             ret += t;
                         }
@@ -1246,16 +1315,18 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
             param.Flags = Flags;
             param.WindowSize = xcompress_native->WindowSize;
             param.CompressionPartitionSize = xcompress_native->CompressionPartitionSize;
+#ifdef WIN32
             XMemCreateDecompressionContext(
                 XMEMCODEC_DEFAULT,
                 &param,
                 0,
                 &ctx);
+#endif
 
             myalloc(ret_out, UncompressedSize, ret_outsz);
 
             for(ret = 0; (in < inl) && (ret < UncompressedSize); ret += t, in += CompressedBlockSize) {
-                CompressedBlockSize = swap(QUICK_GETi32(in, 0));
+                CompressedBlockSize = swap(QUICK_GETi32(in));
                 in += 4;
                 if((in + CompressedBlockSize) < in)  { ret = -1; goto quit; }
                 if((in + CompressedBlockSize) > inl) { ret = -1; goto quit; }
@@ -1268,7 +1339,12 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
                 u8      tmp[MYALLOC_ZEROES];
                 memcpy(tmp, in + CompressedBlockSize, MYALLOC_ZEROES);
                 memset(in + CompressedBlockSize, 0, MYALLOC_ZEROES);
+#ifdef WIN32
                 hr = XMemDecompress(ctx, *ret_out + ret, &t, in, CompressedBlockSize + MYALLOC_ZEROES);
+#else
+                t = appDecompressLZX(                        in, CompressedBlockSize + MYALLOC_ZEROES, *ret_out + ret, t, param.WindowSize, param.CompressionPartitionSize);
+                hr = (t < 0) ? -1 : S_OK;
+#endif
                 memcpy(in + CompressedBlockSize, tmp, MYALLOC_ZEROES);
 
                 if(hr != S_OK) { ret = -1; goto quit; }
@@ -1279,7 +1355,7 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
 
     if(g_comtype_dictionary) {
         param.Flags = 0;
-        param.WindowSize = 128 * 1024;
+        param.WindowSize = 128 * 1024;  // 1<<17
         param.CompressionPartitionSize = 512 * 1024;
         //sscanf(g_comtype_dictionary, "%d %d",
         get_parameter_numbers(g_comtype_dictionary,
@@ -1288,23 +1364,29 @@ int unxmemlzx(u8 *in, int insz, u8 **ret_out, int *ret_outsz) {
 
     // XMemResetDecompressionContext is used only for the streams
 
+#ifdef WIN32
     hr = XMemCreateDecompressionContext(
         XMEMCODEC_DEFAULT,
         g_comtype_dictionary ? &param : NULL,
         0,  // or also 0x80000000 but it seems the same
         &ctx);
     if(hr != S_OK) { ret = -1; goto quit; }
+#endif
 
     ret = *ret_outsz;
+#ifdef WIN32
     hr = XMemDecompress(ctx, *ret_out, &ret, in, insz + MYALLOC_ZEROES); // + MYALLOC_ZEROES: ehmmmm long story, watch myalloc() and DMC4
+#else
+    ret = appDecompressLZX(                  in, insz + MYALLOC_ZEROES, *ret_out, ret, param.WindowSize, param.CompressionPartitionSize);
+    hr = (ret < 0) ? -1 : S_OK;
+#endif
     if(hr != S_OK) { ret = -1; goto quit; }
 
 quit:
+#ifdef WIN32
     if(ctx) XMemDestroyDecompressionContext(ctx);
-    return ret;
-#else
-    return appDecompressLZX(in, insz, *ret_out, *ret_outsz);
 #endif
+    return ret;
 }
 
 
@@ -1369,7 +1451,7 @@ quit:
     if(ctx) XMemDestroyCompressionContext(ctx);
     return ret;
 #else
-    fprintf(stderr, "\nError: XMemCompress is implemented only on Windows\n");
+    fprintf(stderr, "\nError: XMemCompress is implemented on Windows only\n");
     return -1;
 #endif
 }
@@ -1495,21 +1577,20 @@ int unbase64(u8 *in, int insz, u8 *out, int outsz) {
 
 
 
-int unexplode(u8 *in, int insz, u8 *out, int outsz) {
 typedef struct {
     u8      *in;
     int     insz;
     int     outsz;
 } explode_info_t;
 
-unsigned explode_read(void *how, unsigned char **buf) {
+static unsigned explode_read(void *how, unsigned char **buf) {
     explode_info_t *explode_info;
 
     explode_info = (explode_info_t *)how;
     *buf = explode_info->in;
     return(explode_info->insz);
 }
-int explode_write(void *how, unsigned char *buf, unsigned len) {
+static int explode_write(void *how, unsigned char *buf, unsigned len) {
     explode_info_t *explode_info;
 
     explode_info = (explode_info_t *)how;
@@ -1517,6 +1598,7 @@ int explode_write(void *how, unsigned char *buf, unsigned len) {
     return 0;
 }
 
+int unexplode(u8 *in, int insz, u8 *out, int outsz) {
     explode_info_t explode_info;
 
     explode_info.in    = in;
@@ -1863,7 +1945,7 @@ int unlzma##LZMA_VER(u8 *in, int insz, u8 **ret_out, int outsz, int lzma_flags, 
     out = *ret_out; \
     if(lzma_flags & LZMA_FLAGS_86_HEADER) { \
         if(insz < 8) { outlen = -4; goto quit; } \
-        i = QUICK_GETi32(in, 0); \
+        i = QUICK_GETi32(in); \
         if(i < 0) { outlen = -5; goto quit; } \
         if(!auto_size) { \
             outsz = i; \
@@ -1893,9 +1975,9 @@ int unlzma##LZMA_VER(u8 *in, int insz, u8 **ret_out, int outsz, int lzma_flags, 
     \
     int     r; \
     if(auto_size) { \
+        SizeT   _ir, \
+                _or; \
         int     _ip, \
-                _ir, \
-                _or, \
                 outsz_inc; \
         \
         outsz_inc = outsz / 100; \
@@ -1973,130 +2055,6 @@ quit: \
 
 UNLZMA_BASE()
 UNLZMA_BASE(2)
-
-
-
-int ungzip(u8 *in, int insz, u8 **ret_out, int *ret_outsz, int strict) {
-    int     fsize = 0,
-            guess_minsize;
-    u8      flags,
-            cm,
-            *inl,
-            *out;
-
-    if(insz < 14) return -1;
-    if(in[0] != 0x1f) return -1;
-    not_ret_out_boh
-    if(in[1] == 0x8b) {         // gzip
-    } else if(in[1] == 0x9e) {  // old gzip
-    } else if(in[1] == 0x1e) {  // pack
-        return gz_unpack(in + 2, insz - 2, *ret_out, *ret_outsz);
-    } else if(in[1] == 0x9d) {  // lzw (experimental with known size only)
-        return uncompress_lzw(in + 3, insz - 3, *ret_out, *ret_outsz, in[2]);
-    } else if(in[1] == 0xa0) {  // lzh (experimental with known size only)
-        return unlzh(in + 2, insz - 2, *ret_out, *ret_outsz);
-    } else return -1;
-    inl = in + insz;
-
-    // CRC32 and ISIZE
-    if(strict) {
-        inl -= 4;
-        fsize = QUICK_GETi32(inl, 0);   // ISIZE
-        inl -= 4;
-        //QUICK_GETi32(inl, 0);   // CRC32
-
-    } else {
-        guess_minsize = (insz - 12);    // blah
-        if(guess_minsize) guess_minsize -= (guess_minsize / 1000);  // blah
-        if(guess_minsize < 0) guess_minsize = 0;
-        for(inl -= 4; inl > in; inl--) {  // lame, simple and working
-            //fsize = getxx(inl, 4);
-            fsize = QUICK_GETi32(inl, 0); // little endian
-            if(fsize < guess_minsize) continue;
-            if(fsize > 0) break;
-        }
-
-        // The problem is caused by those gzip archives that don't have a size at the end,
-        // so if we have one of these files we are unable to know where the compressed
-        // stream really ends resulting in a partial output file.
-        // And no, we cannot rely on the possible crc32 field because it's calculated on
-        // the output data.
-        // Example: the archives of the Anomaly games that contain gzip files without size at end.
-        inl = in + insz;
-    }
-    
-    // sometimes the gzip archives don't have the decompressed size at the end
-    //if(fsize < insz) fsize = insz;
-    if(fsize < 0) fsize = *ret_outsz;
-    if(fsize > 0x40000000) fsize = *ret_outsz;  // ???
-
-    in += 2;        // id1/id2
-    cm = *in++;     // cm
-    flags = *in++;  // flg
-    in += 4;        // mtime
-    in++;           // xfl
-    in++;           // os
-    if(flags & 4) {
-        in += 2 + (in[0] | (in[1] << 8));
-        if(in >= inl) return -1;
-    }
-    if(flags & 8)  in += strlen(in) + 1;    // name (adding support for names is chaotic and insecure)
-    if(flags & 16) in += strlen(in) + 1;    // comment
-    if(flags & 2)  in += 2;                 // crc
-    if(in >= inl) return -1;
-
-    out = *ret_out;
-    myalloc(&out, fsize, ret_outsz);
-    *ret_out = out;
-
-    switch(cm) {    // based on the ZIP format, totally unrelated to the gzip format
-        case 0:  fsize = uncopy(in, inl - in, out, fsize);                  break;
-        case 8:  fsize = unzip_dynamic(in, inl - in, &out, ret_outsz, 0);   break;
-        case 1:  fsize = unshrink(in, inl - in, out, fsize);                break;
-        case 6:  fsize = unexplode(in, inl - in, out, fsize);               break;
-        case 9:  fsize = inflate64(in, inl - in, out, fsize);               break;
-        case 12: fsize = unbzip2(in, inl - in, out, fsize);                 break;
-        case 14: fsize = unlzma(in, inl - in, &out, fsize, LZMA_FLAGS_EFS, &fsize, 0); break;
-        case 21: fsize = unxmemlzx(in, inl - in, &out, ret_outsz);          break;
-        case 64: fsize = undarksector(in, inl - in, out, fsize, 1);         break;
-        case 98: fsize = unppmdi(in, inl - in, out, fsize);                 break;
-        default: fsize = unzip_dynamic(in, inl - in, &out, ret_outsz, 0);   break;
-    }
-    *ret_out = out;
-    return fsize;
-}
-
-
-
-int gzip_compress(u8 *in, int insz, u8 *out, int outsz) {
-    int     len,
-            crc;
-    u8      *o;
-
-    if(outsz < 18) return -1;
-    o = out;
-    *o++ = 0x1f;    // ID1
-    *o++ = 0x8b;    // ID2
-    *o++ = 0x08;    // CM
-    *o++ = 0x00;    // FLG
-    *o++ = 0;  *o++ = 0;  *o++ = 0;  *o++ = 0;  // MTIME
-    *o++ = 0x00;    // XFL
-    *o++ = 0x00;    // OS
-    //len = deflate_compress(in, insz, o, outsz - (o - out));
-    len = advancecomp_deflate(in, insz, o, outsz - (o - out));
-    if(len < 0) return len;
-    o += len;
-    crc = crc32(0, in, insz);  // CRC32
-    *o++ = crc;
-    *o++ = crc >> 8;
-    *o++ = crc >> 16;
-    *o++ = crc >> 24;
-    *o++ = insz;    // ISIZE
-    *o++ = insz >> 8;
-    *o++ = insz >> 16;
-    *o++ = insz >> 24;
-    return o - out;
-}
 
 
 
@@ -2827,25 +2785,31 @@ static const u8 n32_table[] = "0123456789BCDFGHJKLMNPQRSTVWXYZ.";   // Nintendo
 
 
 
+static unsigned char    *unlzhlib_in,
+                        *unlzhlib_inl,
+                        *unlzhlib_o,
+                        *unlzhlib_outl;
+static void *unlzhlib_malloc (unsigned n) {return malloc (n);}
+static void unlzhlib_free (void *p) {free (p);}
+static int unlzhlib_read (void *p, int n) {
+    if((unlzhlib_in + n) > unlzhlib_inl) n = unlzhlib_inl - unlzhlib_in;
+    memcpy(p, unlzhlib_in, n);
+    unlzhlib_in += n;
+    return(n);
+}
+static int unlzhlib_write (void *p, int n) {
+    if((unlzhlib_o + n) > unlzhlib_outl) return -1;   // the return value is ignored by lzh_melt
+    memcpy(unlzhlib_o, p, n);
+    unlzhlib_o += n;
+    return(n);
+}
 int unlzhlib(unsigned char *in, int insz, unsigned char *out, int outsz) {
-    QUICK_IN_OUT
-
-    void *mymalloc (unsigned n) {return malloc (n);}
-    void myfree (void *p) {free (p);}
-    int myread (void *p, int n) {
-        if((in + n) > inl) n = inl - in;
-        memcpy(p, in, n);
-        in += n;
-        return(n);
-    }
-    int mywrite (void *p, int n) {
-        if((o + n) > outl) return -1;   // the return value is ignored by lzh_melt
-        memcpy(o, p, n);
-        o += n;
-        return(n);
-    }
-    lzh_melt(myread, mywrite, mymalloc, myfree, outsz);
-    return o - out;
+    unlzhlib_in     = in;
+    unlzhlib_inl    = in + insz;
+    unlzhlib_o      = out;
+    unlzhlib_outl   = out + outsz;
+    lzh_melt(unlzhlib_read, unlzhlib_write, unlzhlib_malloc, unlzhlib_free, outsz);
+    return unlzhlib_o - out;
 }
 
 
@@ -3567,7 +3531,7 @@ int slz_triace(unsigned char *in, int insz, unsigned char **ret_out, int outsz, 
     if((insz >= 0x10) && !memcmp(in, "SLZ", 3)) {
         mode = in[3];
         if((mode >= 0) && (mode <= 10)) {
-            outsz = QUICK_GETi32(in, 8);
+            outsz = _QUICK_GETi32(in, 8);
             if(outsz >= 0) {
                 myalloc(&out, outsz, ret_outsz);
                 *ret_out = out;
@@ -5768,10 +5732,15 @@ int nislzs(u8 *binaryReader, u8 *binaryWriter, int num3) {
 	int j = 0;
 	int num6 = 0;
 	byte b = *binaryReader++;
-	if (*binaryReader++ != 0 || *binaryReader++ != 0 || *binaryReader++ != 0)
+
+	/*if (*binaryReader++ != 0 || *binaryReader++ != 0 || *binaryReader++ != 0)
 	{
 		return -1; //throw new Exception("padding bytes are not 0");
-	}
+	}*/
+    if(!binaryReader[0] && !binaryReader[1] && !binaryReader[2]) {
+        binaryReader += 3;  // by Luigi in case similar algorithms use this way
+    }
+
 	while (j < num3)
 	{
 		byte b2 = *binaryReader++;
@@ -6284,7 +6253,7 @@ int LZOvl_Decompress(u8 *instream, long inLength, u8 *outstream)
     // read the last 4 bytes, the 'extraSize'
     instream += inLength - 4;
 
-    uint extraSize = QUICK_GETi32(instream, 0);
+    uint extraSize = QUICK_GETi32(instream);
     instream += 4;
 
     //#endregion
@@ -6563,6 +6532,39 @@ int lz5f_decompress(u8 *in, int insz, u8 *out, int outsz) {
 
 
 
+int lz4f_compress(u8 *in, int insz, u8 *out, int outsz) {
+    LZ4F_compressionLevel_max();
+    LZ4F_compressionContext_t ctx;
+    LZ4F_preferences_t  pref;
+    memset(&pref, 0, sizeof(pref));
+    pref.compressionLevel = LZ4HC_CLEVEL_MAX;
+    LZ4F_createCompressionContext(&ctx, LZ4F_VERSION);
+    int     dstSize = 0;
+    dstSize += LZ4F_compressBegin( ctx, out + dstSize, outsz - dstSize,           &pref);
+    dstSize += LZ4F_compressUpdate(ctx, out + dstSize, outsz - dstSize, in, insz, NULL);
+    dstSize += LZ4F_compressEnd(   ctx, out + dstSize, outsz - dstSize,           NULL);
+    LZ4F_freeCompressionContext(ctx);
+    return dstSize;
+}
+
+
+
+int lz5f_compress(u8 *in, int insz, u8 *out, int outsz) {
+    LZ5F_compressionContext_t ctx;
+    LZ5F_preferences_t  pref;
+    memset(&pref, 0, sizeof(pref));
+    pref.compressionLevel = 16;
+    LZ5F_createCompressionContext(&ctx, LZ5F_VERSION);
+    int     dstSize = 0;
+    dstSize += LZ5F_compressBegin( ctx, out + dstSize, outsz - dstSize,           &pref);
+    dstSize += LZ5F_compressUpdate(ctx, out + dstSize, outsz - dstSize, in, insz, NULL);
+    dstSize += LZ5F_compressEnd(   ctx, out + dstSize, outsz - dstSize,           NULL);
+    LZ5F_freeCompressionContext(ctx);
+    return dstSize;
+}
+
+
+
 //http://www.embedded-os.de/en/pclzfg.shtml
 int unpclzfg(unsigned char *source, int source_l, unsigned char *Decdata_p) {
     #define LZFG_W          4096        // windowsize
@@ -6803,17 +6805,21 @@ int jch_decompress(u8 *in, int insz, u8 *out, int outsz) {
 	{ "-pm2-", &lha_pm2_decoder },
 */
 
-int lha_decoder(u8 *in, int insz, u8 *out, int outsz, u8 *type) {
-    u8      *inl = in + insz;
-    u8      *o = out,
-            *ol = out + outsz;
+    static u8   *lha_decoder_in;
+    static u8   *lha_decoder_inl;
 
-    size_t myLHADecoderCallback(void *buf, size_t buf_len, void *user_data) {
-        if(buf_len > (inl - in)) buf_len = (inl - in);
-        memcpy(buf, in, buf_len);
-        in += buf_len;
+    static size_t myLHADecoderCallback(void *buf, size_t buf_len, void *user_data) {
+        if(buf_len > (lha_decoder_inl - lha_decoder_in)) buf_len = (lha_decoder_inl - lha_decoder_in);
+        memcpy(buf, lha_decoder_in, buf_len);
+        lha_decoder_in += buf_len;
         return buf_len;
     }
+
+int lha_decoder(u8 *in, int insz, u8 *out, int outsz, u8 *type) {
+    lha_decoder_in  = in;
+    lha_decoder_inl = in + insz;
+    u8 *o   = out;
+    u8 *ol  = out + outsz;
 
     LHADecoder *ctx;
     LHADecoderType  *lha_type;
@@ -6881,7 +6887,7 @@ int LZHUFXR_decompress(u8 *in, int insz, u8 *out, int outsz) {
 
 
 
-u8 *myzopfli(u8 *in, int insz, int *ret_outsz, int type) {
+u8 *myzopfli(u8 *in, int insz, int *ret_outsz, int type, int extreme) {
     size_t  outsz   = 0;
     u8      *out    = NULL;
 
@@ -6890,12 +6896,21 @@ u8 *myzopfli(u8 *in, int insz, int *ret_outsz, int type) {
     ZopfliOptions   opt;
     memset(&opt, 0, sizeof(opt));
     ZopfliInitOptions(&opt);
-         if(insz < (10 * 1024 * 1024))  opt.numiterations = 15; // this is
-    else if(insz < (50 * 1024 * 1024))  opt.numiterations = 10; // just for
-    else                                opt.numiterations = 5;  // speed
+
     opt.blocksplitting      = 1;
-    opt.blocksplittinglast  = 0;
-    opt.blocksplittingmax   = 0;
+    opt.blocksplittinglast  = 0;    // useless
+    if(extreme) {
+        // over 6 minutes to compress less than 4Mb (it depends by the content)... definitely not good
+        // even numiterations 1 takes over 4 minutes
+             if(insz < (10 * 1024 * 1024))  opt.numiterations = 15; // this is
+        else if(insz < (50 * 1024 * 1024))  opt.numiterations = 10; // just for
+        else                                opt.numiterations = 5;  // speed
+        opt.blocksplittingmax   = 0; // zero is really extreme and slow
+    } else {
+        opt.numiterations       = 1;
+        opt.blocksplittingmax   = 200;
+    }
+
     ZopfliCompress(&opt, type, in, insz, &out, &outsz);
 
     if(ret_outsz) *ret_outsz = outsz;
@@ -7020,16 +7035,16 @@ int uclpack(unsigned char *in, int insz, unsigned char *out, int outsz) {
     if(insz < 22) return -1;
     if(memcmp(in, "\x00\xe9\x55\x43\x4c\xff\x01\x1a", 8)) return -2;
     in += 8;
-    u32 flags       = QUICK_GETb32(in,0);   in += 4;
+    u32 flags       = QUICK_GETb32(in); in += 4;
     u8  method      = *in++;
     u8  level       = *in++;
-    u32 block_size  = QUICK_GETb32(in,0);   in += 4;
+    u32 block_size  = QUICK_GETb32(in); in += 4;
 
     while((in + 4) <= inl) {
-        u32 size    = QUICK_GETb32(in,0);   in += 4;
+        u32 size    = QUICK_GETb32(in); in += 4;
         if(!size) break;
         if((in + 4) > inl) return -3;
-        u32 zsize   = QUICK_GETb32(in,0);   in += 4;
+        u32 zsize   = QUICK_GETb32(in); in += 4;
         if(size < 0) return -4;
         if(zsize < 0) return -5;
         if(zsize < size) {
@@ -7522,7 +7537,7 @@ int dslzss(unsigned char *in, int insz, unsigned char *out, int outsz) {
 
 
 // made by zombie28
-// http://encode.ru/threads/2417-Creating-A-Compressor-for-JDLZ?p=46247&viewfull=1#post46247
+// https://encode.su/threads/2417-Creating-A-Compressor-for-JDLZ?p=46247&viewfull=1#post46247
 int jdlz_compress(byte *input, int input_Length, byte *output)
 {
     //const int HeaderSize = 16;
@@ -7681,10 +7696,10 @@ int segs_decompress(unsigned char *in, int insz, unsigned char **ret_out, int *r
     u8  *BASE_OFF   = in;
     if(memcmp(in, "segs", 4)) return -1;
     in += 4;
-    int FLAGS       = QUICK_GETb16(in,0); in += 2;
-    int CHUNKS      = QUICK_GETb16(in,0); in += 2;
-    int FULL_SIZE   = QUICK_GETb32(in,0); in += 4;
-    int FULL_ZSIZE  = QUICK_GETb32(in,0); in += 4;
+    int FLAGS       = QUICK_GETb16(in); in += 2;
+    int CHUNKS      = QUICK_GETb16(in); in += 2;
+    int FULL_SIZE   = QUICK_GETb32(in); in += 4;
+    int FULL_ZSIZE  = QUICK_GETb32(in); in += 4;
     u8  *BASE2_OFF  = in + (CHUNKS * (2 + 2 + 4));
     int WORKAROUND  = 0;
 
@@ -7697,9 +7712,9 @@ int segs_decompress(unsigned char *in, int insz, unsigned char **ret_out, int *r
 
     for(i = 0; i < CHUNKS; i++) {
         if(in >= inl) return -1;
-        int ZSIZE   = QUICK_GETb16(in,0); in += 2;
-        int SIZE    = QUICK_GETb16(in,0); in += 2;
-        int OFFSET  = QUICK_GETb32(in,0); in += 4;
+        int ZSIZE   = QUICK_GETb16(in); in += 2;
+        int SIZE    = QUICK_GETb16(in); in += 2;
+        int OFFSET  = QUICK_GETb32(in); in += 4;
         OFFSET -= 1;
         if((i == 0) && (OFFSET == 0)) {
             WORKAROUND = 1;
@@ -7731,9 +7746,9 @@ int ps_lz77_decompress(unsigned char *inf, unsigned char *in, int insz, unsigned
 
     if(!memcmp(in, "LZ77", 4)) {
         in += 4;
-        int new_outsz       = (g_endian == MYLITTLE_ENDIAN) ? QUICK_GETi32(in,0) : QUICK_GETb32(in,0);  in += 4;
-        int LZ77STEPCOUNT   = (g_endian == MYLITTLE_ENDIAN) ? QUICK_GETi32(in,0) : QUICK_GETb32(in,0);  in += 4;
-        int new_off         = (g_endian == MYLITTLE_ENDIAN) ? QUICK_GETi32(in,0) : QUICK_GETb32(in,0);  in += 4;
+        int new_outsz       = (g_endian == MYLITTLE_ENDIAN) ? QUICK_GETi32(in) : QUICK_GETb32(in);  in += 4;
+        int LZ77STEPCOUNT   = (g_endian == MYLITTLE_ENDIAN) ? QUICK_GETi32(in) : QUICK_GETb32(in);  in += 4;
+        int new_off         = (g_endian == MYLITTLE_ENDIAN) ? QUICK_GETi32(in) : QUICK_GETb32(in);  in += 4;
         if(new_outsz < 0) return -1;
         if(LZ77STEPCOUNT < 0) return -1;
         if(new_off < 0) return -1;
@@ -8240,11 +8255,11 @@ int my_rnc_decompress(u8 *in, int zsize, u8 **ret_out, int *ret_outsz, int size)
     if(!memcmp(in, "RNC", 3)) {
         in += 3;
         int VER = *in++;
-        int SIZE    = QUICK_GETb32(in,0);   in += 4;    // get SIZE long
-        int ZSIZE   = QUICK_GETb32(in,0);   in += 4;    // get ZSIZE long
-                                            in += 2;    // get CRC short
-                                            in += 2;    // get CRC short
-                                            in += 2;    // get DUMMY short
+        int SIZE    = QUICK_GETb32(in); in += 4;    // get SIZE long
+        int ZSIZE   = QUICK_GETb32(in); in += 4;    // get ZSIZE long
+                                        in += 2;    // get CRC short
+                                        in += 2;    // get CRC short
+                                        in += 2;    // get DUMMY short
 
         zsize = inl - in;
         if(zsize < 0) return -1;
@@ -8411,7 +8426,8 @@ int konamiac(unsigned char *in, int insz, unsigned char *out, int outsz, int ski
 
 
 int xrefpack(unsigned char *in, int zsize, unsigned char **out, int *outsize, int size, int do0) {
-    int     t32, tt32;
+    size_t      t32;
+    uint32_t    tt32;
     t32 = tt32 = 0;
     if(!refpack_decompress_safe(in, zsize, NULL, *out, size, &t32, NULL, &tt32, do0)) {
         size = t32;
@@ -8745,9 +8761,9 @@ int ykcmp_decompress(unsigned char *in, int insz, unsigned char *out, int outsz)
     // no security checks
     if(!memcmp(in, "YKCMP_V1", 8)) {
         in += 8;
-        /*flags   = QUICK_GETi32(in,0);*/   in += 4;    // 4
-        insz    = QUICK_GETi32(in,0);   in += 4;
-        outsz   = QUICK_GETi32(in,0);   in += 4;
+        /*flags   = QUICK_GETi32(in);*/   in += 4;    // 4
+        insz    = QUICK_GETi32(in);   in += 4;
+        outsz   = QUICK_GETi32(in);   in += 4;
         insz -= 20; // yeah, the declared compressed size includes the header
     }
 
@@ -9003,22 +9019,20 @@ int lzwab_compress(u8 *in, int insz, u8 *out, int outsz, int decompress) {
 
 // https://github.com/wasaylor/unzap
 /* sub_001DE0B0 */
-int swzap_decompress(uint8_t *src, uint8_t *dest /*, size_t *outz, size_t *outa*/)  {
-
-static const int MARKER_BITS = (0x10);
 
 typedef struct {
   uint32_t bits;
   uint32_t value;
-} _marker;
+} swzap_marker;
 
-/*static*/ inline void read_marker(uint8_t **srcpp, _marker *out) {
+static void swzap_read_marker(uint8_t **srcpp, swzap_marker *out) {
+  static const int MARKER_BITS = (0x10);
   out->bits = MARKER_BITS;
   out->value = ((*srcpp)[1] << 8) | (*srcpp)[0];
   (*srcpp) += 2;
 }
 
-/*static*/ inline uint32_t check_marker(uint8_t **srcpp, _marker *m) {
+static uint32_t swzap_check_marker(uint8_t **srcpp, swzap_marker *m) {
   uint32_t b;
 
   b = m->value & 1;
@@ -9026,32 +9040,33 @@ typedef struct {
   --m->bits;
 
   if (m->bits == 0)
-    read_marker(srcpp, m);
+    swzap_read_marker(srcpp, m);
 
   return b;
 }
 
-  _marker m = {0};
+int swzap_decompress(uint8_t *src, uint8_t *dest /*, size_t *outz, size_t *outa*/)  {
+  swzap_marker m = {0};
   uint8_t *srcp, *destp, *copyp;
   uint32_t x, l;
 
   srcp = src;
   destp = dest;
 
-  read_marker(&srcp, &m);
+  swzap_read_marker(&srcp, &m);
 
   while (1) { /* loc_1DE0DC */
-    if (check_marker(&srcp, &m)) {
+    if (swzap_check_marker(&srcp, &m)) {
       *destp++ = *srcp++;
       continue;
     }
 
     /* loc_1DE124 */
-    if (!check_marker(&srcp, &m)) {
+    if (!swzap_check_marker(&srcp, &m)) {
       uint32_t a, b;
 
-      a = check_marker(&srcp, &m) << 1;
-      b = check_marker(&srcp, &m);
+      a = swzap_check_marker(&srcp, &m) << 1;
+      b = swzap_check_marker(&srcp, &m);
 
       x = 0xffffff00 | *srcp++;
       l = (a | b) + 3;
@@ -9784,5 +9799,896 @@ int CLZ__unpack(u8 *infile, int infile_size, u8 *outfile) {
   }
 
     return o - outfile;
+}
+
+
+
+// converted from https://raw.githubusercontent.com/zhaihj/konami-lz77/master/src/lz77.rs
+int konami_lz77_decompress(unsigned char *input, int input_len, unsigned char *output) {
+    static const int WINDOW_SIZE = 0x1000;
+    static const int THRESHOLD = 3;
+    int cur_byte = 0;
+    unsigned char window[WINDOW_SIZE];
+    int window_cursor = 0;
+    unsigned char *o = output;
+    int     i;
+
+    while(cur_byte < input_len) {
+        int flag = input[cur_byte];
+        cur_byte += 1;
+
+        for(i = 0; i < 8; i++) {
+            if ((flag >> i) & 1) {
+                *o++ = input[cur_byte];
+                window[window_cursor] = input[cur_byte];
+                window_cursor = (window_cursor + 1) & (WINDOW_SIZE-1);
+                cur_byte += 1;
+            } else {
+                int w = (input[cur_byte]) << 8 | (input[cur_byte + 1]);
+                if(w == 0) {
+                    return o - output;
+                }
+                cur_byte += 2;
+                int position = ((window_cursor - (w >> 4)) & (WINDOW_SIZE-1));
+                int length = (w & 0x0F) + THRESHOLD;
+
+                while(length--) {
+                    int b = window[position & (WINDOW_SIZE-1)];
+                    *o++ = b;
+                    window[window_cursor] = b;
+                    window_cursor = (window_cursor + 1) & (WINDOW_SIZE-1);
+                    position = position + 1;
+                }
+            }
+        }
+    }
+    return o - output;
+}
+
+
+
+#include "included/garbro.c"
+
+
+
+int aplib_compress(unsigned char *in, int insz, unsigned char *out) {
+    // long story short, only the coff is available which links well on gcc for Windows
+    // but I don't want to get annoyed linking different libraries for each platform,
+    // therefore Windows is ok while the others get a fake compressor (untested).
+#ifdef WIN32
+    u8  *workmem = malloc(aP_workmem_size(insz));
+    int outsz = aP_pack(in, out, insz, workmem, NULL, NULL);
+    FREE(workmem)
+    return outsz;
+#else
+    u8  bitchr=0,bitpos=0;
+    u8  *o = out;
+    int i;
+    for(i = 0; i < insz; i++) {
+        if(!i) {
+            *o++ = *in++;
+        } else {
+            DOZBITS(o, 1, 0);
+            DOZBITS(o, 8, *in++);
+        }
+    }
+    DOZBITS(o, 1, 1);
+    DOZBITS(o, 1, 1);
+    DOZBITS(o, 8, 0);
+    if(bitpos) o++;
+    return o - out;
+#endif
+}
+
+
+
+// original code by Inuk Syooperstar
+// modified by Luigi Auriemma
+/*
+Thread: https://zenhax.com/viewtopic.php?f=17&t=14162
+
+OSK Tool.py is written in Python, so install Python 3.8+ to use it.
+Drag & drop an .XPF file onto it, and it will make a directory next to that file ending in 'dump.'
+Example: OSK Tool.py "path/to/file.xpf"
+Output folder: "path/to/file.xpf dump/"
+Giving it a folder packs it into an .xpf, and the process is pretty much the same:
+Example: OSK Tool.py "path/to/file.xpf dump/"
+Output file: "path/to/file.xpf dump.xpf"
+
+Also included in this bundle are .cpp files, where the compression and decompression functions have been written in C++.
+This is useful if someone wants to make a tool in that language, which would be good for speed.
+They are useless if you're not a C++ programmer and just want to pack/unpack .xpf files, though - you'll have to use the Python tool until an alternative tool is made.
+
+OSK Tool.py has various compression levels available to use.
+To use them, run the program from the command line, with the folder to compress as OSK Tool.py's first argument,
+and the level number as the second argument.
+Example: OSK Tool.py "path/to/file.xpf" 2
+Example: OSK Tool.py "path/to/file.xpf" 0
+
+Effect of the different levels on a large file:
+Recompression table for DATA\BTLDATA\ALPHA\FIELD\BEILY41.XPF 
+	level	elapsed	xpfsize
+	0		.02s	346,764
+	1		9.6s	111,640
+	2		9.6s	111,585
+	3		128.14s	94,211
+	4		118.21s	93,716
+By default, level 4 is used, which compresses better than originally done in the game.
+Level 3 will compress files exactly identically to the original game.
+Levels 1-2 are fast, but only offer middling compression.
+Level 0 will generate valid files, and take almost no time at all, but will inflate the file size.
+*/
+
+#define OKAGE_NEXT_CBIT \
+if(!bitmask){\
+	cbyte = *ibuf++;\
+	bitmask = 0x80;\
+}\
+cbit = cbyte & bitmask;\
+bitmask >>= 1;
+
+// This function takes the compressed file buffer (not the entire XPF archive),
+// a pointer to an integer (32-bit) that the decompressed filesize is written to,
+// and it returns the pointer to the decompressed file buffer.
+int okage_decompress(unsigned char* ibuf, unsigned char *obufbase){
+	//uint32_t obufsize = __builtin_bswap32(*(uint32_t*) ibuf); // point is to load this int as big endian
+	//char* obufbase = (char*) malloc(obufsize);
+	unsigned char* obuf = obufbase;
+	
+	int cbyte = *ibuf++; //ibuf[4];
+	int cbit;
+	int bitmask = 0x80;
+	int32_t writecounter; // signed
+	int32_t backoffset; // signed
+	int backoffset_original;
+	
+	//ibuf += 5;
+	while(1){
+		OKAGE_NEXT_CBIT;
+		if(!cbit){ // write 1 raw byte
+			*obuf++ = *ibuf++;
+			continue;
+		}
+		OKAGE_NEXT_CBIT;
+		
+		backoffset_original = *ibuf++;
+		backoffset = backoffset_original | 0xFFFFFF00; // force negative with 32-bit sign extension
+		if(!cbit){
+			if(!backoffset_original) break; // return if the original byte is null
+		}else{
+            int i;
+			for(i = 0; i < 4; i++){
+				OKAGE_NEXT_CBIT;
+				backoffset = !cbit ?
+					(backoffset << 1) :
+					(backoffset << 1) + 1;
+			}
+			backoffset -= 255;
+		}
+		writecounter = 1;
+		while(1){
+			OKAGE_NEXT_CBIT;
+			if(!cbit) break;
+			OKAGE_NEXT_CBIT;
+			writecounter = !cbit ?
+				(writecounter << 1) :
+				(writecounter << 1) + 1;
+		}
+		for(;writecounter > -1; writecounter--) // duplicate spans from the decoded buffer
+			*obuf++ = *(obuf + backoffset);
+	}
+	//*obufsizeref = obufsize;
+	return obuf - obufbase;
+}
+
+#define OKAGE_WRITE_CBIT(b) \
+if(bitmasker < 0){\
+	*cbytepointer = cbyte;\
+	cbytepointer = cbuf++;\
+	bitmasker = 7;\
+	cbyte = 0;\
+}\
+cbyte |= b << bitmasker--;
+
+// This function takes a pointer to the raw data buffer as dbufbase,
+// the size of the buffer as dbufsize,
+// writes the size of the newly compressed buffer into compressedsize,
+// then returns the compressed buffer
+int okage_compress(unsigned char* dbufbase, uint32_t dbufsize, unsigned char *cbufbase){
+    /*
+	unsigned char* cbufbase = (char*) malloc( // outbuffer can be bigger if compression isn't applicable
+		dbufsize + // the uncompressed size...
+		4 + // the decompressed size int...
+		(dbufsize / 8) + // worst case scenario; 1 cbyte per 8 raw bytes...
+		256 // and just some crapshoot number to top it off, not gonna come up with an exact buffer size
+	);
+	*(uint32_t*)cbufbase = __builtin_bswap32(dbufsize); // write uncompressed sz as big endian
+    */
+	
+	unsigned char* cbytepointer = cbufbase;// + 4;
+	unsigned char* cbuf = cbufbase + 1; //5; // incrementable write pointer
+	unsigned char* dbuf = dbufbase; // incrementable read pointer
+	
+	int probe_span, probe_back, span, back, span_1;
+	bool spanmatch, writebits, withhold;
+	uint32_t signshifted; // used in the boff
+	
+	int bitmasker = 7;
+	unsigned char cbyte = 0;
+
+    int i, bitmask;
+	
+	while( (dbuf - dbufbase) < dbufsize ){
+		probe_span = probe_back = span = back = 1;
+		while(probe_back <= 4351){ //// PROBE FOR COPIABLE SPANS
+			spanmatch = true;
+			for(i = 0; i < probe_span; i++){
+				if( *(char*)(dbuf-probe_back + i) != *(char*)(dbuf + i) ){
+					spanmatch = false;
+					break;
+				}
+			}
+			if(spanmatch){
+				back = probe_back;
+				span = probe_span++;
+				continue;
+			}
+			probe_back++;
+			if(dbuf-probe_back < dbufbase) break; // went past beginning, nothing more to do
+		} //// END PROBE
+		if(span == 1){
+			OKAGE_WRITE_CBIT(0); // no boff
+			*cbuf++ = *dbuf;
+		}else{
+			OKAGE_WRITE_CBIT(1); // boff mode
+			if(back <= 255){ // small boff
+				OKAGE_WRITE_CBIT(0); // small boff
+				*cbuf++ = -back;
+			}else{ // big boff
+				OKAGE_WRITE_CBIT(1); // big boff
+				signshifted = 0x1000 + 255 - back;
+				*(uint8_t*)cbuf++ = signshifted >> 4;
+				for (bitmask = 0x8; bitmask > 0; bitmask >>= 1) {
+					/* 0b1000 write
+					   0b0100 write
+					   0b0010 write
+					   0b0001 write then terminate */
+					OKAGE_WRITE_CBIT( !!(signshifted & bitmask) );
+				}
+			}
+			span_1 = span - 1;
+			writebits = false;
+			for (bitmask = 0x800; bitmask > 0; bitmask >>= 1){
+				if(writebits){
+					OKAGE_WRITE_CBIT(1);
+					OKAGE_WRITE_CBIT( !!(span_1 & bitmask) );
+				}else{
+					if(span_1 & bitmask) writebits = true; // ignore first 1-bit
+				}
+			}
+			OKAGE_WRITE_CBIT(0);
+		}
+		dbuf += span;
+	}
+	OKAGE_WRITE_CBIT(1);
+	OKAGE_WRITE_CBIT(0);
+	if(bitmasker != 7) *cbytepointer = cbyte; // write the in-progress cbits
+	*cbuf++ = 0; // include a terminator boff
+	
+	//*compressedsize = (uint32_t)(cbuf - cbufbase);
+	return cbuf - cbufbase;
+}
+
+
+
+// https://github.com/Nisto/lzsd/blob/master/lzsd_of.c
+// Omega Five (XBLA) LZS decompressor
+
+int lzsd_of_decompress(uint8_t *src, uint8_t **aOutData, int *aOutSize)
+{
+  uint8_t *dst, *dict, *comd, *rawd, threshold;
+
+  uint16_t word, size, flags_bits_remaining, num_size_bits;
+
+  uint32_t flags, size_mask;
+
+  int32_t todo;
+
+  comd = src + QUICK_GETb32(src+0x08);
+  rawd = src + QUICK_GETb32(src+0x0C);
+
+  /* *aOutSize =*/ todo = QUICK_GETb32(src+0x10);
+  //*aOutData = dst = malloc(todo);
+  dst = myalloc(aOutData, todo, aOutSize);
+
+  if (dst == NULL) {
+    printf("ERROR: Could not allocate output buffer for LZS data\n");
+    return -1; //exit(EXIT_FAILURE);
+  }
+
+  num_size_bits = src[0x05];
+  threshold = src[0x19];
+
+  size_mask = 0xFFFF >> (16 - num_size_bits);
+  todo = todo / 2;
+
+  while (todo) {
+    for (flags=QUICK_GETb16(comd), comd=comd+2, flags_bits_remaining=16; todo && flags_bits_remaining; flags_bits_remaining--, flags>>=1) {
+      if (flags & 1) { /* raw data (uncompressed) */
+        *dst++ = *rawd++;
+        *dst++ = *rawd++;
+        todo = todo - 1;
+      } else { /* dictionary data (compressed) */
+        word = (comd[0] << 8) | comd[1];
+        comd = comd + 2;
+        size = (word & size_mask) + threshold;
+        todo = todo - size;
+        dict = dst - ( (word >> num_size_bits) * 2 );
+        do {
+          *dst++ = *dict++;
+          *dst++ = *dict++;
+        } while (--size);
+      }
+    }
+  }
+  return dst - *aOutData;
+}
+
+
+
+// https://github.com/Nisto/lzsd/blob/master/lzsd_gfd.c
+// Gear Fighter Dendoh (PS1) LZS decompressor
+
+int lzsd_gfd_decompress(uint8_t *src, uint8_t **aOutData, int *aOutSize)
+{
+  uint8_t *dst, *dict, num_offset_bits_high, offset_high_mask, size;
+
+  uint16_t flags, flags_mask;
+
+  uint32_t version;
+
+  int32_t todo;
+
+  version = QUICK_GETi32(src+0x00);
+  /* *aOutSize =*/ todo = QUICK_GETi32(src+0x04);
+  num_offset_bits_high = QUICK_GETi32(src+0x08) - 8;
+  offset_high_mask = (1 << num_offset_bits_high) - 1;
+
+  if (version == 1)
+    src += 0x10;
+  else if (version == 3)
+    src += 0x1C;
+  else
+    return -1;
+
+  //*aOutData = dst = malloc(todo);
+  dst = myalloc(aOutData, todo, aOutSize);
+
+  if (dst == NULL) {
+    printf("ERROR: Could not allocate output buffer for LZS data\n");
+    return -1; //exit(EXIT_FAILURE);
+  }
+
+  while (todo) {
+    flags = (src[1] << 8) | src[0];
+    src = src + 2;
+    if (flags == 0) {
+      size = MIN(todo, 16);
+      todo = todo - size;
+      do { *dst++ = *src++; } while (--size);
+    } else {
+      for (flags_mask = 1; todo && (flags_mask & 0xFFFF); flags_mask <<= 1) {
+        if (flags & flags_mask) {
+          dict = dst - ((((src[1] & offset_high_mask) << 8) | src[0]) + 1);
+          size = (src[1] >> num_offset_bits_high) + 3;
+          src  = src + 2;
+          todo = todo - size;
+          do { *dst++ = *dict++; } while (--size);
+        } else {
+          *dst++ = *src++;
+          todo = todo - 1;
+        }
+      }
+    }
+  }
+  return dst - *aOutData;
+}
+
+
+
+// https://github.com/Nisto/lzsd/blob/master/lzsd_gba2.c
+// Gundam Battle Assault 2 (PS1) LZS decompressor
+
+int lzsd_gba2_decompress(uint8_t *src, uint8_t **aOutData, int *aOutSize)
+{
+  uint8_t *dst, *dict;
+
+  uint16_t i, word, size, flags_bits_remaining,
+           num_size_bits, num_flags_bits,
+           num_flags_bytes;
+
+  uint32_t flags, size_mask;
+
+  int32_t todo;
+
+  /**aOutSize =*/ todo = QUICK_GETi32(src+0x24);
+  //*aOutData = dst = malloc(todo);
+  dst = myalloc(aOutData, todo, aOutSize);
+
+  if (dst == NULL) {
+    printf("ERROR: Could not allocate output buffer for LZS data\n");
+    return -1; //exit(EXIT_FAILURE);
+  }
+
+  num_flags_bits = QUICK_GETi16(src+0x28);
+  num_flags_bytes = num_flags_bits / 8;
+  num_size_bits = QUICK_GETi16(src+0x2A);
+  size_mask = 0xFFFF >> (16 - num_size_bits);
+  src += 0x20 + QUICK_GETi16(src+0x22);
+
+  while (todo) {
+    for (i = flags = 0; i < num_flags_bytes; i++, src++) {
+      flags |= (*src) << (i * 8);
+    }
+
+    for (flags_bits_remaining = num_flags_bits; todo && flags_bits_remaining; flags_bits_remaining--, flags >>= 1) {
+      if (flags & 1) { /* raw data (uncompressed) */
+        *dst++ = *src++;
+        todo = todo - 1;
+      } else { /* dictionary data (compressed) */
+        word = (src[0] << 8) | src[1];
+        size = (word & size_mask) + 3;
+        src  = src + 2;
+        todo = todo - size;
+        dict = dst - (word >> num_size_bits);
+        do { *dst++ = *dict++; } while (--size);
+      }
+    }
+  }
+  return dst - *aOutData;
+}
+
+
+
+// https://github.com/infval/pzzcompressor_jojo
+int PZZ_Decompress(const uint8_t* src, uint8_t* dst, size_t src_len)
+{
+    size_t offset, count;
+    size_t spos = 0, dpos = 0;
+    uint16_t cb = 0;
+    int8_t cb_bit = -1;
+
+    src_len = src_len / 2 * 2;
+    while (spos < src_len) {
+        if (cb_bit < 0) {
+            cb  = src[spos++] << 0;
+            cb |= src[spos++] << 8;
+            cb_bit = 15;
+        }
+
+        int compress_flag = cb & (1 << cb_bit);
+        cb_bit--;
+
+        if (compress_flag) {
+            count  = src[spos++] << 0;
+            count |= src[spos++] << 8;
+            offset = (count & 0x7FF) * 2;
+            if (offset == 0) {
+                break; // End of the compressed data
+            }
+            count >>= 11;
+            if (count == 0) {
+                count  = src[spos++] << 0;
+                count |= src[spos++] << 8;
+            }
+            count *= 2;
+            size_t j;
+            for (j = 0; j < count; j++) {
+                dst[dpos] = dst[dpos - offset];
+                dpos++;
+            }
+        }
+        else {
+            dst[dpos++] = src[spos++];
+            dst[dpos++] = src[spos++];
+        }
+    }
+    return dpos;
+}
+
+
+
+// code by aaa801 https://zenhax.com/viewtopic.php?p=62626#p62626
+// FYI: there is a script on https://forum.xentax.com/viewtopic.php?t=15505 using lzo1x but it doesn't work
+int sld_decode(int *binData,byte *param_2)
+{
+  byte bVar1;
+  int iVar2;
+  byte *pbVar3;
+  uint uVar4;
+  int iVar5;
+  uint uVar6;
+  uint uVar7;
+  uint *puVar8;
+  uint *puVar9;
+  byte *ret = param_2;
+                    /*  != "SL01" */
+  if (*binData != 0x31304c53) {
+    binData = &binData[-2 /* SL01 + size */]; //errorLog("sld_decode");
+  }
+  puVar8 = (uint *)(binData + 3);
+  uVar7 = (uint)binData[2] >> 0x18;
+  uVar6 = binData[2] & 0xffffff;
+  while (uVar6 != 0) {
+    uVar6 -= 1;
+    iVar5 = 0x20;
+    uVar4 = *puVar8;
+    puVar9 = puVar8 + 1;
+    do {
+      if ((uVar4 & 1) == 0) {
+        iVar2 = (*(byte *)((int)puVar9 + 1) & 0xf) + 2;
+        puVar8 = (uint *)((int)puVar9 + 2);
+        if (iVar2 == 2) {
+          bVar1 = *(byte *)puVar8;
+          puVar8 = (uint *)((int)puVar9 + 3);
+          iVar2 = bVar1 + 0x12;
+        }
+        pbVar3 = param_2 + (-1 - ((uint)*(byte *)puVar9 | (*(byte *)((int)puVar9 + 1) & 0xf0) <<4));
+        do {
+          bVar1 = *pbVar3;
+          pbVar3 = pbVar3 + 1;
+          iVar2 += -1;
+          *param_2 = bVar1;
+          param_2 = param_2 + 1;
+        } while (iVar2 != 0);
+      }
+      else {
+        puVar8 = (uint *)((int)puVar9 + 1);
+        *param_2 = *(byte *)puVar9;
+        param_2 = param_2 + 1;
+      }
+      iVar5 += -1;
+      uVar4 >>= 1;
+      puVar9 = puVar8;
+    } while (iVar5 != 0);
+  }
+  if (uVar7 != 0) {
+    uVar6 = *puVar8;
+    puVar8 = puVar8 + 1;
+    do {
+      if ((uVar6 & 1) == 0) {
+        iVar5 = (*(byte *)((int)puVar8 + 1) & 0xf) + 2;
+        puVar9 = (uint *)((int)puVar8 + 2);
+        if (iVar5 == 2) {
+          bVar1 = *(byte *)puVar9;
+          puVar9 = (uint *)((int)puVar8 + 3);
+          iVar5 = bVar1 + 0x12;
+        }
+        pbVar3 = param_2 + (-1 - ((uint)*(byte *)puVar8 | (*(byte *)((int)puVar8 + 1) & 0xf0) <<4));
+        do {
+          bVar1 = *pbVar3;
+          pbVar3 = pbVar3 + 1;
+          iVar5 += -1;
+          *param_2 = bVar1;
+          param_2 = param_2 + 1;
+        } while (iVar5 != 0);
+      }
+      else {
+        puVar9 = (uint *)((int)puVar8 + 1);
+        *param_2 = *(byte *)puVar8;
+        param_2 = param_2 + 1;
+      }
+      uVar7 -= 1;
+      uVar6 >>= 1;
+      puVar8 = puVar9;
+    } while (uVar7 != 0);
+  }
+  return param_2 - ret;
+}
+
+
+
+// PPMD H and I
+#include "libs/ppmd_7zip/Ppmd7.h"
+#include "libs/ppmd_7zip/Ppmd8.h"
+
+struct ppmd_CharWriter {
+    void (*ppmd_Write)(void *p, unsigned char b);
+    unsigned char *fp;
+    unsigned char *fpl;
+};
+
+struct ppmd_CharReader {
+    unsigned char (*ppmd_Read)(void *p);
+    unsigned char *fp;
+    unsigned char *fpl;
+};
+
+static void ppmd_Write(void *p, unsigned char b) {
+    if(p) {
+        struct ppmd_CharWriter *cw = p;
+        if(cw->fp < cw->fpl) {
+            *cw->fp = b;
+            cw->fp++;
+        }
+    }
+}
+
+static unsigned char ppmd_Read(void *p) {
+    unsigned char   ret = 0;
+    if(p) {
+        struct ppmd_CharReader *cr = p;
+        if(cr->fp < cr->fpl) {
+            ret = *cr->fp;
+            cr->fp++;
+        }
+    }
+    return ret;
+}
+
+static int ppmd_SaSize   = 10;
+static int ppmd_MaxOrder = 4;
+static int ppmd_Method   = 0;
+
+// PPMD H
+
+int ppmdh_compress_raw(unsigned char *in, int insz, unsigned char *out, int outsz, int SaSize, int MaxOrder) {
+    if(SaSize   <= 0) SaSize   = ppmd_SaSize;
+    if(MaxOrder <= 0) MaxOrder = ppmd_MaxOrder;
+
+    struct ppmd_CharWriter cw = { ppmd_Write, out, out + outsz };
+    CPpmd7 ppmd;
+    Ppmd7_Construct(&ppmd);
+    if(!Ppmd7_Alloc(&ppmd, SaSize << 20, &lzma_g_Alloc)) return -1;
+    Ppmd7_Init(&ppmd, MaxOrder);
+
+    CPpmd7z_RangeEnc rc;
+    memset(&rc, 0, sizeof(rc));
+    rc.Stream = (IByteOut *)&cw;
+    Ppmd7z_RangeEnc_Init(&rc);
+
+    int     i;
+    for(i = 0; i < insz; i++) {
+        Ppmd7_EncodeSymbol(&ppmd, &rc, in[i]);
+    }
+    Ppmd7_EncodeSymbol(&ppmd, &rc, -1); /* EndMark */
+    Ppmd7z_RangeEnc_FlushData(&rc);
+    Ppmd7_Free(&ppmd, &lzma_g_Alloc);
+    return cw.fp - out;
+}
+
+int ppmdh_compress(unsigned char *in, int insz, unsigned char *out, int outsz) {
+    if(outsz < 2) return -1;
+    int         MaxOrder = ppmd_MaxOrder;
+    int         SaSize   = ppmd_SaSize;
+    int parameters = ((MaxOrder - 1) & 0xf) | (((SaSize - 1) & 0xff) << 4) | (0 << 12);
+    out[0] = parameters;
+    out[1] = parameters >> 8;
+    return 2 + ppmdh_compress_raw(in, insz, out + 2, outsz - 2, SaSize, MaxOrder);
+}
+
+int ppmdh_decompress_raw(unsigned char *in, int insz, unsigned char *out, int outsz, int SaSize, int MaxOrder) {
+    if(SaSize   <= 0) SaSize   = ppmd_SaSize;
+    if(MaxOrder <= 0) MaxOrder = ppmd_MaxOrder;
+
+    struct ppmd_CharReader cr = { ppmd_Read, in, in + insz };
+    CPpmd7 ppmd;
+    Ppmd7_Construct(&ppmd);
+    if(!Ppmd7_Alloc(&ppmd, SaSize << 20, &lzma_g_Alloc)) return -1;
+    Ppmd7_Init(&ppmd, MaxOrder);
+
+    CPpmd7z_RangeDec rc;
+    Ppmd7z_RangeDec_CreateVTable(&rc);
+    rc.Stream = (IByteIn *)&cr;
+    Ppmd7z_RangeDec_Init(&rc);
+
+    int     i;
+    for(i = 0; i < outsz; i++) {
+        int sym = Ppmd7_DecodeSymbol(&ppmd, &rc.vt);
+        if(sym < 0) break;
+        out[i] = sym;
+    }
+    //may fail// if(!Ppmd7z_RangeDec_IsFinishedOK(&rc)) return -1;
+    Ppmd7_Free(&ppmd, &lzma_g_Alloc);
+    return i;
+}
+
+int ppmdh_decompress(unsigned char *in, int insz, unsigned char *out, int outsz) {
+    if(insz < 2) return(-1);
+    int         parameters = in[0] | (in[1] << 8);
+    int         MaxOrder = (parameters & 0x0f) + 1;
+    int         SaSize   = ((parameters >> 4) & 0xFF) + 1;
+    return ppmdh_decompress_raw(in + 2, insz - 2, out, outsz, SaSize, MaxOrder);
+}
+
+// PPMD I
+
+int ppmdi_compress_raw(unsigned char *in, int insz, unsigned char *out, int outsz, int SaSize, int MaxOrder, int Method) {
+    if(SaSize   <= 0) SaSize   = ppmd_SaSize;
+    if(MaxOrder <= 0) MaxOrder = ppmd_MaxOrder;
+    if(Method   <= 0) Method   = ppmd_Method;   // zero anyway
+
+    struct ppmd_CharWriter cw = { ppmd_Write, out, out + outsz };
+    CPpmd8 ppmd = { .Stream.Out = (IByteOut *) &cw };
+    Ppmd8_Construct(&ppmd);
+    if(!Ppmd8_Alloc(&ppmd, SaSize << 20, &lzma_g_Alloc)) return -1;
+    Ppmd8_Init(&ppmd, MaxOrder, Method);
+    Ppmd8_RangeEnc_Init(&ppmd);
+
+    int     i;
+    for(i = 0; i < insz; i++) {
+        Ppmd8_EncodeSymbol(&ppmd, in[i]);
+    }
+    Ppmd8_EncodeSymbol(&ppmd, -1); /* EndMark */
+    Ppmd8_RangeEnc_FlushData(&ppmd);
+    Ppmd8_Free(&ppmd, &lzma_g_Alloc);
+    return cw.fp - out;
+}
+
+int ppmdi_compress(unsigned char *in, int insz, unsigned char *out, int outsz) {
+    if(outsz < 2) return -1;
+    int         MaxOrder = ppmd_MaxOrder;
+    int         SaSize   = ppmd_SaSize;
+    int         MRMethod = ppmd_Method;
+    int parameters = ((MaxOrder - 1) & 0xf) | (((SaSize - 1) & 0xff) << 4) | (MRMethod << 12);
+    out[0] = parameters;
+    out[1] = parameters >> 8;
+    return 2 + ppmdi_compress_raw(in, insz, out + 2, outsz - 2, SaSize, MaxOrder, MRMethod);
+}
+
+int ppmdi_decompress_raw(unsigned char *in, int insz, unsigned char *out, int outsz, int SaSize, int MaxOrder, int Method) {
+    if(SaSize   <= 0) SaSize   = ppmd_SaSize;
+    if(MaxOrder <= 0) MaxOrder = ppmd_MaxOrder;
+    if(Method   <= 0) Method   = ppmd_Method;   // zero anyway
+
+    struct ppmd_CharReader cr = { ppmd_Read, in, in + insz };
+    CPpmd8 ppmd = { .Stream.In = (IByteIn *) &cr };
+    Ppmd8_Construct(&ppmd);
+    if(!Ppmd8_Alloc(&ppmd, SaSize << 20, &lzma_g_Alloc)) return -1;
+    Ppmd8_Init(&ppmd, MaxOrder, Method);
+    Ppmd8_RangeDec_Init(&ppmd);
+
+    int     i;
+    for(i = 0; i < outsz; i++) {
+        int sym = Ppmd8_DecodeSymbol(&ppmd);
+        if(sym < 0) break;
+        out[i] = sym;
+    }
+    //fails with my sample// if(!Ppmd8_RangeDec_IsFinishedOK(&ppmd)) return -1;
+    Ppmd8_Free(&ppmd, &lzma_g_Alloc);
+    return i;
+}
+
+int ppmdi_decompress(unsigned char *in, int insz, unsigned char *out, int outsz) {
+    if(insz < 2) return(-1);
+    int         parameters = in[0] | (in[1] << 8);
+    int         MaxOrder = (parameters & 0x0f) + 1;
+    int         SaSize   = ((parameters >> 4) & 0xFF) + 1;
+    int         MRMethod =          (parameters >> 12);
+    return ppmdi_decompress_raw(in + 2, insz - 2, out, outsz, SaSize, MaxOrder, MRMethod);
+}
+
+
+
+int ungzip(u8 *in, int insz, u8 **ret_out, int *ret_outsz, int strict) {
+    int     fsize = 0,
+            guess_minsize;
+    u8      flags,
+            cm,
+            *inl,
+            *out;
+
+    if(insz < 14) return -1;
+    if(in[0] != 0x1f) return -1;
+    not_ret_out_boh
+    if(in[1] == 0x8b) {         // gzip
+    } else if(in[1] == 0x9e) {  // old gzip
+    } else if(in[1] == 0x1e) {  // pack
+        return gz_unpack(in + 2, insz - 2, *ret_out, *ret_outsz);
+    } else if(in[1] == 0x9d) {  // lzw (experimental with known size only)
+        return uncompress_lzw(in + 3, insz - 3, *ret_out, *ret_outsz, in[2]);
+    } else if(in[1] == 0xa0) {  // lzh (experimental with known size only)
+        return unlzh(in + 2, insz - 2, *ret_out, *ret_outsz);
+    } else return -1;
+    inl = in + insz;
+
+    // CRC32 and ISIZE
+    if(strict) {
+        inl -= 4;
+        fsize = QUICK_GETi32(inl);   // ISIZE
+        inl -= 4;
+        //QUICK_GETi32(inl);   // CRC32
+
+    } else {
+        guess_minsize = (insz - 12);    // blah
+        if(guess_minsize) guess_minsize -= (guess_minsize / 1000);  // blah
+        if(guess_minsize < 0) guess_minsize = 0;
+        for(inl -= 4; inl > in; inl--) {  // lame, simple and working
+            //fsize = getxx(inl, 4);
+            fsize = QUICK_GETi32(inl); // little endian
+            if(fsize < guess_minsize) continue;
+            if(fsize > 0) break;
+        }
+
+        // The problem is caused by those gzip archives that don't have a size at the end,
+        // so if we have one of these files we are unable to know where the compressed
+        // stream really ends resulting in a partial output file.
+        // And no, we cannot rely on the possible crc32 field because it's calculated on
+        // the output data.
+        // Example: the archives of the Anomaly games that contain gzip files without size at end.
+        inl = in + insz;
+    }
+    
+    // sometimes the gzip archives don't have the decompressed size at the end
+    //if(fsize < insz) fsize = insz;
+    if(fsize < 0) fsize = *ret_outsz;
+    if(fsize > 0x40000000) fsize = *ret_outsz;  // ???
+
+    in += 2;        // id1/id2
+    cm = *in++;     // cm
+    flags = *in++;  // flg
+    in += 4;        // mtime
+    in++;           // xfl
+    in++;           // os
+    if(flags & 4) {
+        in += 2 + (in[0] | (in[1] << 8));
+        if(in >= inl) return -1;
+    }
+    if(flags & 8)  in += strlen(in) + 1;    // name (adding support for names is chaotic and insecure)
+    if(flags & 16) in += strlen(in) + 1;    // comment
+    if(flags & 2)  in += 2;                 // crc
+    if(in >= inl) return -1;
+
+    out = *ret_out;
+    myalloc(&out, fsize, ret_outsz);
+    *ret_out = out;
+
+    switch(cm) {    // based on the ZIP format, totally unrelated to the gzip format
+        case 0:  fsize = uncopy(in, inl - in, out, fsize);                  break;
+        case 8:  fsize = unzip_dynamic(in, inl - in, &out, ret_outsz, 0);   break;
+        case 1:  fsize = unshrink(in, inl - in, out, fsize);                break;
+        case 6:  fsize = unexplode(in, inl - in, out, fsize);               break;
+        case 9:  fsize = inflate64(in, inl - in, out, fsize);               break;
+        case 12: fsize = unbzip2(in, inl - in, out, fsize);                 break;
+        case 14: fsize = unlzma(in, inl - in, &out, fsize, LZMA_FLAGS_EFS, &fsize, 0); break;
+        case 21: fsize = unxmemlzx(in, inl - in, &out, ret_outsz);          break;
+        case 64: fsize = undarksector(in, inl - in, out, fsize, 1);         break;
+        case 98: fsize = ppmdi_decompress /*unppmdi*/ (in, inl - in, out, fsize); break;
+        default: fsize = unzip_dynamic(in, inl - in, &out, ret_outsz, 0);   break;
+    }
+    *ret_out = out;
+    return fsize;
+}
+
+
+
+int gzip_compress(u8 *in, int insz, u8 *out, int outsz) {
+    int     len,
+            crc;
+    u8      *o;
+
+    if(outsz < 18) return -1;
+    o = out;
+    *o++ = 0x1f;    // ID1
+    *o++ = 0x8b;    // ID2
+    *o++ = 0x08;    // CM
+    *o++ = 0x00;    // FLG
+    *o++ = 0;  *o++ = 0;  *o++ = 0;  *o++ = 0;  // MTIME
+    *o++ = 0x00;    // XFL
+    *o++ = 0x00;    // OS
+    //len = deflate_compress(in, insz, o, outsz - (o - out));
+    len = libdeflate_compress(-15, in, insz, o, outsz - (o - out));
+    if(len < 0) return len;
+    o += len;
+    crc = crc32(0, in, insz);  // CRC32
+    *o++ = crc;
+    *o++ = crc >> 8;
+    *o++ = crc >> 16;
+    *o++ = crc >> 24;
+    *o++ = insz;    // ISIZE
+    *o++ = insz >> 8;
+    *o++ = insz >> 16;
+    *o++ = insz >> 24;
+    return o - out;
 }
 

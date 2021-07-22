@@ -267,7 +267,7 @@ static struct mspack_system lzxSys =
 	&appDecompressLZX_copy
 };
 
-/*static*/ int appDecompressLZX(byte *CompressedBuffer, int CompressedSize, byte *UncompressedBuffer, int UncompressedSize)
+/*static*/ int appDecompressLZX(byte *CompressedBuffer, int CompressedSize, byte *UncompressedBuffer, int UncompressedSize, int WindowSize, int CompressionPartitionSize)
 {
 	//guard(appDecompressLZX);
 
@@ -281,7 +281,13 @@ static struct mspack_system lzxSys =
 	dst.bufSize = UncompressedSize;
 	dst.pos     = 0;
 	// prepare decompressor
-	struct lzxd_stream *lzxd = lzxd_init(&lzxSys, (void *)&src, (void *)&dst, 17, 0, 256*1024, UncompressedSize, 0);
+    if(WindowSize >= 32) {  // max is 21 or 25 (delta)
+        int t = WindowSize;
+        for(WindowSize = 0; t >>= 1; WindowSize++);
+    }
+    if(WindowSize <= 0) WindowSize = 17;
+    if(CompressionPartitionSize <= 0) CompressionPartitionSize = 256*1024;
+	struct lzxd_stream *lzxd = lzxd_init(&lzxSys, (void *)&src, (void *)&dst, WindowSize, 0, CompressionPartitionSize, UncompressedSize, 0);
 	//assert(lzxd);
 	// decompress
 	int r = lzxd_decompress(lzxd, UncompressedSize);
@@ -294,11 +300,5 @@ static struct mspack_system lzxSys =
 	//unguard;
     return ret;
 }
-
-
-
-
-
-
 
 

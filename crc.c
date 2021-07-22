@@ -1,5 +1,5 @@
 /*
-    Copyright 2013 Luigi Auriemma
+    Copyright 2013-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -184,12 +184,18 @@ u32 UHash(unsigned char *data, int len, u32 hash, u32 poly, u32 TableSize) {
 
 #include "libs/crc/murmurhash.c"
 #include "libs/crc/more_crc.c"
+#include "libs/spookyhash/spookyhash.h"
 uint64 CityHash64(const char *buf, size_t len);
 uint64 CityHash64WithSeed(const char *buf, size_t len, uint64 seed);
 uint64 CityHash64WithSeeds(const char *buf, size_t len, uint64 seed0, uint64 seed1);
 uint32 CityHash32(const char *buf, size_t len);
+#include "libs/xxhash/xxhash.h"
+/*
 unsigned int       XXH32 (const void* input, size_t length, unsigned seed);
 unsigned long long XXH64 (const void* input, size_t length, unsigned long long seed);
+unsigned long long XXH3_64bits (const void* input, size_t length);
+unsigned long long XXH3_64bits_withSeed (const void* input, size_t length, unsigned long long seed);
+*/
 
 
 
@@ -253,6 +259,10 @@ u64 crc_calc(crc_context *ctx, u8 *data, int datalen, i32 *ret_error) {
     else if(ctx->type == 37) crc =              adler32(0, data, datalen);
     else if(ctx->type == 38) crc =              fnv32(data, datalen, crc ? crc : 0x811c9dc5);
     else if(ctx->type == 39) crc =              UHash(data, datalen, crc, ctx->poly, 0x7fffffff);
+    else if(ctx->type == 40) crc =              spookyhash_32(data, datalen, ctx->poly);
+    else if(ctx->type == 41) crc =              spookyhash_64(data, datalen, ctx->poly);
+    else if(ctx->type == 42) crc =              XXH3_64bits(data, datalen);
+    else if(ctx->type == 43) crc =              XXH3_64bits_withSeed(data, datalen, ctx->poly);
     else {
         fprintf(stderr, "\nError: unsupported crc type %d\n", (int32_t)ctx->type);
         if(ret_error) *ret_error = 1;

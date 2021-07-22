@@ -10,7 +10,7 @@ V ?= 0
 
 OS := $(shell uname)
 ifeq ($(OS),Darwin)
-LIBARCHS = x86_64
+LIBARCHS ?= x86_64
 PREFIX ?= /usr/local
 endif
 
@@ -22,6 +22,11 @@ endif
 
 ifeq ($(CROSS),)
 RANLIB ?= ranlib
+else ifeq ($(ANDROID), 1)
+CC = $(CROSS)/../../bin/clang
+AR = $(CROSS)/ar
+RANLIB = $(CROSS)/ranlib
+STRIP = $(CROSS)/strip
 else
 CC = $(CROSS)gcc
 AR = $(CROSS)ar
@@ -40,7 +45,7 @@ ifneq (,$(findstring yes,$(CAPSTONE_X86_ATT_DISABLE)))
 CFLAGS += -DCAPSTONE_X86_ATT_DISABLE
 endif
 
-CFLAGS += -fPIC -Wall -Wwrite-strings -Iinclude
+CFLAGS += -fPIC -Wall -Wwrite-strings -Wmissing-prototypes -Iinclude
 
 ifeq ($(CAPSTONE_USE_SYS_DYN_MEM),yes)
 CFLAGS += -DCAPSTONE_USE_SYS_DYN_MEM
@@ -83,10 +88,10 @@ LIBDATADIR = $(LIBDIR)
 
 ifndef USE_GENERIC_LIBDATADIR
 ifeq ($(UNAME_S), FreeBSD)
-LIBDATADIR = $(PREFIX)/libdata
+LIBDATADIR = $(DESTDIR)$(PREFIX)/libdata
 endif
 ifeq ($(UNAME_S), DragonFly)
-LIBDATADIR = $(PREFIX)/libdata
+LIBDATADIR = $(DESTDIR)$(PREFIX)/libdata
 endif
 endif
 
@@ -119,6 +124,7 @@ endif
 
 
 DEP_M68K =
+DEP_M68K += $(wildcard arch/M68K/M68K*.inc)
 DEP_M68K += $(wildcard arch/M68K/M68K*.h)
 
 LIBOBJ_M68K =
@@ -411,22 +417,27 @@ endif
 	$(INSTALL_DATA) include/capstone/*.h $(DESTDIR)$(INCDIR)/$(LIBNAME)
 	mkdir -p $(PKGCFGDIR)
 	$(INSTALL_DATA) $(PKGCFGF) $(PKGCFGDIR)
+ifeq (,$(findstring yes,$(CAPSTONE_BUILD_CORE_ONLY)))
 	mkdir -p $(BINDIR)
 	$(INSTALL_LIB) cstool/cstool $(BINDIR)
+endif
 
 uninstall:
 	rm -rf $(DESTDIR)$(INCDIR)/$(LIBNAME)
 	rm -f $(LIBDIR)/lib$(LIBNAME).*
 	rm -f $(PKGCFGDIR)/$(LIBNAME).pc
+ifeq (,$(findstring yes,$(CAPSTONE_BUILD_CORE_ONLY)))
 	rm -f $(BINDIR)/cstool
+endif
 
 clean:
 	rm -f $(LIBOBJ)
 	rm -f $(BLDIR)/lib$(LIBNAME).* $(BLDIR)/$(LIBNAME).pc
 	rm -f $(PKGCFGF)
-	$(MAKE) -C cstool clean
+	[ "${ANDROID}" = "1" ] && rm -rf android-ndk-* || true
 
 ifeq (,$(findstring yes,$(CAPSTONE_BUILD_CORE_ONLY)))
+	$(MAKE) -C cstool clean
 	$(MAKE) -C tests clean
 	$(MAKE) -C suite/fuzz clean
 	rm -f $(BLDIR)/tests/lib$(LIBNAME).$(EXT)
@@ -471,7 +482,11 @@ fuzztest:
 	./suite/fuzz/fuzz_disasm $(FUZZ_INPUTS)
 
 fuzzallcorp:
-	./suite/fuzz/fuzz_bindisasm suite/fuzz/corpus-libFuzzer-capstone_fuzz_disasmnext-latest/
+ifneq ($(wildcard suite/fuzz/corpus-libFuzzer-capstone_fuzz_disasmnext-latest),)
+	./suite/fuzz/fuzz_bindisasm suite/fuzz/corpus-libFuzzer-capstone_fuzz_disasmnext-latest/ > fuzz_bindisasm.log || (tail -1 fuzz_bindisasm.log; false)
+else
+	@echo "Skipping tests on whole corpus"
+endif
 
 $(OBJDIR)/%.o: %.c
 	@mkdir -p $(@D)
@@ -514,7 +529,7 @@ define generate-pkgcfg
 	echo 'Description: Capstone disassembly engine' >> $(PKGCFGF)
 	echo 'Version: $(PKG_VERSION)' >> $(PKGCFGF)
 	echo 'libdir=$(LIBDIR)' >> $(PKGCFGF)
-	echo 'includedir=$(INCDIR)' >> $(PKGCFGF)
+	echo 'includedir=$(INCDIR)/capstone' >> $(PKGCFGF)
 	echo 'archive=$${libdir}/libcapstone.a' >> $(PKGCFGF)
 	echo 'Libs: -L$${libdir} -lcapstone' >> $(PKGCFGF)
 	echo 'Cflags: -I$${includedir}' >> $(PKGCFGF)

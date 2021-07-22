@@ -206,16 +206,16 @@ typedef struct
 }
 dic_item;
 
-dic_item *dic;
-FILE *source, *target;
-long bitbuf=0, bits=0;
-int code_len=9, code, available=fst_code-1;
-int mapped=0, tagged=0, pure_char=0;
+static dic_item *dic;
+static FILE *source, *target;
+static long bitbuf=0, bits=0;
+static int code_len=9, code, available=fst_code-1;
+static int mapped=0, tagged=0, pure_char=0;
 
-int read_code(void);
-int read_bits(int len);
-unsigned char write_string(int code);
-int shrink();
+static int read_code(void);
+static int read_bits(int len);
+static unsigned char write_string(int code);
+static int shrink();
 
 int unjam(unsigned char *in, int insz, unsigned char *out, int outsz) {
   int  old_code=nil, i;
@@ -276,7 +276,7 @@ int unjam(unsigned char *in, int insz, unsigned char *out, int outsz) {
 /* ----------------------- routines ------------------------ */
 
 
-int read_code(void)
+static int read_code(void)
 { int val;
   if (!tagged)
   { val=read_bits(code_len); if (val==EOF) return EOF;
@@ -314,7 +314,7 @@ int read_code(void)
     }
 }
 
-int read_bits(int len)
+static int read_bits(int len)
 {
    int c;
    while (bits<len)
@@ -328,7 +328,7 @@ int read_bits(int len)
    return (bitbuf>>bits)&((1<<len)-1);
 }
 
-unsigned char write_string(int codex)
+static unsigned char write_string(int codex)
 {
    unsigned char c;
    int i=codex;
@@ -350,7 +350,7 @@ unsigned char write_string(int codex)
    return c;
 }
 
-int shrink()
+static int shrink()
 { int i; /* 'dad' will be used as 'next' */
 
   /* step one: mark leaves, reconstruct the tree structure, and

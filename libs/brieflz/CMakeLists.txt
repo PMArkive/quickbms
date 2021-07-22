@@ -77,7 +77,7 @@ endif()
 # Library version
 #
 set(BRIEFLZ_VERSION_MAJOR 1)
-set(BRIEFLZ_VERSION_MINOR 2)
+set(BRIEFLZ_VERSION_MINOR 3)
 set(BRIEFLZ_VERSION_PATCH 0)
 set(BRIEFLZ_VERSION ${BRIEFLZ_VERSION_MAJOR}.${BRIEFLZ_VERSION_MINOR}.${BRIEFLZ_VERSION_PATCH})
 
@@ -92,12 +92,10 @@ endif()
 #
 add_library(brieflz ${brieflz_library_type}
   src/brieflz.c
+  src/brieflz_btparse.h
   src/brieflz_hashbucket.h
-  src/brieflz_hashchain.h
   src/brieflz_lazy.h
   src/brieflz_leparse.h
-  src/brieflz_sliding.h
-  src/brieflz_ssparse.h
   src/depack.c
   src/depacks.c
   include/brieflz.h

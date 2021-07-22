@@ -16,7 +16,7 @@ enum {
 
 
 
-extern "C" int advancecomp_rfc1950(unsigned char *in, int insz, unsigned char *out, int outsz) {
+extern "C" int advancecomp_zlib(unsigned char *in, int insz, unsigned char *out, int outsz) {
     unsigned int    out_size = outsz;
     if(!compress_rfc1950_7z(in, insz, out, out_size, 5, 258)) return(-1);
     return(out_size);

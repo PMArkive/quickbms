@@ -18,21 +18,21 @@ typedef int64_t     qint64;
 
 #define BUFFER_SIZE 0x600000
 
+static quint16 DecryptAsh_swap16(quint16 n) {
+    n = (((n & 0xff00) >> 8) |
+         ((n & 0x00ff) << 8));
+    return(n);
+}
+static quint32 DecryptAsh_swap32(quint32 n) {
+    n = (((n & 0xff000000) >> 24) |
+         ((n & 0x00ff0000) >>  8) |
+         ((n & 0x0000ff00) <<  8) |
+         ((n & 0x000000ff) << 24));
+    return(n);
+}
+
 quint8* DecryptAsh( const quint8* ba_data , int *ret_size, int optional_outsz)
 {
-    inline quint16 DecryptAsh_swap16(quint16 n) {
-        n = (((n & 0xff00) >> 8) |
-             ((n & 0x00ff) << 8));
-        return(n);
-    }
-    inline quint32 DecryptAsh_swap32(quint32 n) {
-        n = (((n & 0xff000000) >> 24) |
-             ((n & 0x00ff0000) >>  8) |
-             ((n & 0x0000ff00) <<  8) |
-             ((n & 0x000000ff) << 24));
-        return(n);
-    }
-
     int     skip_header = 0;
 
     if(ret_size) *ret_size = 0;

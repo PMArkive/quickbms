@@ -1,3 +1,4 @@
+// modified by Luigi Auriemma
 /***********************************************************************
 
 Copyright 2015 - 2016 Kennon Conrad
@@ -20,21 +21,21 @@ limitations under the License.
 #include "GLZAmodel.h"
 #include <stdio.h>
 
-uint32_t InCharNum, OutCharNum;
-uint32_t RangeLow, RangeHigh, count;
-uint32_t low, code, range, extra_range;
-uint8_t * InBuffer;
-uint8_t FoundIndex;
-uint8_t SymbolFirstChar[4][0x100][0x100];
-uint8_t RangeScaleERG[3], RangeScaleWordTag;
-uint8_t FreqERG[3], FreqWordTag, *OutBuffer;
-uint16_t RangeScaleMtfQueueNum[2], RangeScaleMtfQueuePos[2][14], RangeScaleMtfgQueuePos[2];
-uint16_t RangeScaleSID[2], RangeScaleINST[2][16];
-uint16_t RangeScaleFirstChar[4][0x100];
-uint16_t RangeScaleFirstCharSection[0x100][7];
-uint16_t FreqSymType[4][4], FreqMtfQueueNum[2][14], FreqMtfQueuePos[2][14][64], FreqMtfgQueuePos[2][256];
-uint16_t FreqSID[2][16], FreqINST[2][16][38], FreqFirstChar[4][0x100][0x100], FreqFirstCharBinary[0x100][0x100];
-const uint32_t MTF_QUEUE_SIZE = 64;
+static uint32_t InCharNum, OutCharNum;
+static uint32_t RangeLow, RangeHigh, count;
+static uint32_t low, code, range, extra_range;
+static uint8_t * InBuffer;
+static uint8_t FoundIndex;
+static uint8_t SymbolFirstChar[4][0x100][0x100];
+static uint8_t RangeScaleERG[3], RangeScaleWordTag;
+static uint8_t FreqERG[3], FreqWordTag, *OutBuffer;
+static uint16_t RangeScaleMtfQueueNum[2], RangeScaleMtfQueuePos[2][14], RangeScaleMtfgQueuePos[2];
+static uint16_t RangeScaleSID[2], RangeScaleINST[2][16];
+static uint16_t RangeScaleFirstChar[4][0x100];
+static uint16_t RangeScaleFirstCharSection[0x100][7];
+static uint16_t FreqSymType[4][4], FreqMtfQueueNum[2][14], FreqMtfQueuePos[2][14][64], FreqMtfgQueuePos[2][256];
+static uint16_t FreqSID[2][16], FreqINST[2][16][38], FreqFirstChar[4][0x100][0x100], FreqFirstCharBinary[0x100][0x100];
+static const uint32_t MTF_QUEUE_SIZE = 64;
 
 uint32_t ReadLow() {return(low);}
 uint32_t ReadRange() {return(range);}

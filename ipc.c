@@ -1,5 +1,5 @@
 /*
-    Copyright 2018 Luigi Auriemma
+    Copyright 2018-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -283,7 +283,7 @@ u8 *ipc_handle_command(i32 sd, ipc_keyval_t *kv, u8 *in, i32 zsize, i32 *ret_siz
 
             } else if(stristr(kv[i].key, "dict")) {
                 if(stristr(kv[i].key, "64")) kv[i].val32 = unbase64(kv[i].val, -1, kv[i].val, -1);
-                else                         kv[i].val32 = cstring( kv[i].val, kv[i].val, -1, NULL);
+                else                         kv[i].val32 = cstring( kv[i].val, kv[i].val, -1, NULL, NULL);
                 argv[2].val   = kv[i].val;
                 argv[3].val32 = kv[i].val32;
 
@@ -314,13 +314,13 @@ u8 *ipc_handle_command(i32 sd, ipc_keyval_t *kv, u8 *in, i32 zsize, i32 *ret_siz
 
             } else if(stristr(kv[i].key, "key")) {
                 if(stristr(kv[i].key, "64")) kv[i].val32 = unbase64(kv[i].val, -1, kv[i].val, -1);
-                else                         kv[i].val32 = cstring( kv[i].val, kv[i].val, -1, NULL);
+                else                         kv[i].val32 = cstring( kv[i].val, kv[i].val, -1, NULL, NULL);
                 argv[2].val   = kv[i].val;
                 argv[3].val32 = kv[i].val32;
 
             } else if(stristr(kv[i].key, "ivec")) {
                 if(stristr(kv[i].key, "64")) kv[i].val32 = unbase64(kv[i].val, -1, kv[i].val, -1);
-                else                         kv[i].val32 = cstring( kv[i].val, kv[i].val, -1, NULL);
+                else                         kv[i].val32 = cstring( kv[i].val, kv[i].val, -1, NULL, NULL);
                 argv[4].val   = kv[i].val;
                 argv[5].val32 = kv[i].val32;
 
@@ -1006,8 +1006,7 @@ for(;;) {
                 memset(&kv[argc], 0, sizeof(ipc_keyval_t));
                 mystrdup(&(kv[argc].key), name);
                 delimit(kv[argc].key);
-                kv[argc].val = malloc_copy(kv[argc].val, p, l - p);
-                kv[argc].valsz = l - p;
+                malloc_copy((void **)&kv[argc].val, p, kv[argc].valsz = l - p);
                 //delimit(kv[argc].val);    // don't delimit it (it's already done by l-2), keep it open for possible multiple files
                 argc++;
             }
@@ -1512,8 +1511,6 @@ int quickbms_ipc(int port) {
             *virtual_name,
             *name;
 
-    if(port <= 0) return -1;
-
 #ifdef WIN32
     WSADATA    wsadata;
     WSAStartup(MAKEWORD(1,0), &wsadata);
@@ -1530,6 +1527,14 @@ int quickbms_ipc(int port) {
     // mailslot, not thread-safe
     quick_threadx(pipeslot_ipc_server, (void *)2);
     sleepms(100);
+
+    if(port <= 0) {
+        printf("- named pipes and mailslot running, no web API available\n");
+        // nothing to run so let's just keep the main thread sleeping
+        for(;;) {
+            sleepms(60 * 1000);
+        }
+    }
 
     // web API
     memset(&peerl, 0, sizeof(peerl));

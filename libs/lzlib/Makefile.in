@@ -15,8 +15,10 @@ objs = carg_parser.o main.o
 .PHONY : all install install-bin install-info install-man \
          install-strip install-compress install-strip-compress \
          install-bin-strip install-info-compress install-man-compress \
-         install-lib install-lib-strip uninstall-lib install-as-lzip \
-         uninstall uninstall-bin uninstall-info uninstall-man \
+         install-bin-compress install-bin-strip-compress \
+         install-lib install-lib-strip \
+         install-as-lzip \
+         uninstall uninstall-bin uninstall-lib uninstall-info uninstall-man \
          doc info man check dist clean distclean
 
 all : $(progname_static) $(progname_shared)
@@ -35,6 +37,9 @@ $(progname)_shared : $(objs) lib$(libname).so.$(pkgversion)
 
 bbexample : bbexample.o lib$(libname).a
 	$(CC) $(LDFLAGS) $(CFLAGS) -o $@ bbexample.o lib$(libname).a
+
+ffexample : ffexample.o lib$(libname).a
+	$(CC) $(LDFLAGS) $(CFLAGS) -o $@ ffexample.o lib$(libname).a
 
 lzcheck : lzcheck.o lib$(libname).a
 	$(CC) $(LDFLAGS) $(CFLAGS) -o $@ lzcheck.o lib$(libname).a
@@ -57,6 +62,7 @@ lzlib.o       : Makefile $(lzdeps)
 lzlib_sh.o    : Makefile $(lzdeps)
 main.o        : carg_parser.h lzlib.h
 bbexample.o   : Makefile lzlib.h
+ffexample.o   : Makefile lzlib.h
 lzcheck.o     : Makefile lzlib.h
 
 
@@ -75,15 +81,17 @@ $(VPATH)/doc/$(progname).1 : $(progname)
 Makefile : $(VPATH)/configure $(VPATH)/Makefile.in
 	./config.status
 
-check : $(progname) bbexample lzcheck
+check : $(progname) bbexample ffexample lzcheck
 	@$(VPATH)/testsuite/check.sh $(VPATH)/testsuite $(pkgversion)
 
 install : install-lib install-info
 install-strip : install-lib-strip install-info
 install-compress : install-lib install-info-compress
 install-strip-compress : install-lib-strip install-info-compress
+install-bin-compress : install-bin install-man-compress
+install-bin-strip-compress : install-bin-strip install-man-compress
 
-install-bin : all install-man
+install-bin : all
 	if [ ! -d "$(DESTDIR)$(bindir)" ] ; then $(INSTALL_DIR) "$(DESTDIR)$(bindir)" ; fi
 	$(INSTALL_PROGRAM) ./$(progname_lzip) "$(DESTDIR)$(bindir)/$(progname)"
 
@@ -119,7 +127,7 @@ install-info :
 	-rm -f "$(DESTDIR)$(infodir)/$(pkgname).info"*
 	$(INSTALL_DATA) $(VPATH)/doc/$(pkgname).info "$(DESTDIR)$(infodir)/$(pkgname).info"
 	-if $(CAN_RUN_INSTALLINFO) ; then \
-		install-info --info-dir="$(DESTDIR)$(infodir)" "$(DESTDIR)$(infodir)/$(pkgname).info" ; \
+	  install-info --info-dir="$(DESTDIR)$(infodir)" "$(DESTDIR)$(infodir)/$(pkgname).info" ; \
 	fi
 
 install-info-compress : install-info
@@ -139,7 +147,7 @@ install-as-lzip : install-bin
 
 uninstall : uninstall-info uninstall-lib
 
-uninstall-bin : uninstall-man
+uninstall-bin :
 	-rm -f "$(DESTDIR)$(bindir)/$(progname)"
 
 uninstall-lib :
@@ -151,7 +159,7 @@ uninstall-lib :
 
 uninstall-info :
 	-if $(CAN_RUN_INSTALLINFO) ; then \
-		install-info --info-dir="$(DESTDIR)$(infodir)" --remove "$(DESTDIR)$(infodir)/$(pkgname).info" ; \
+	  install-info --info-dir="$(DESTDIR)$(infodir)" --remove "$(DESTDIR)$(infodir)/$(pkgname).info" ; \
 	fi
 	-rm -f "$(DESTDIR)$(infodir)/$(pkgname).info"*
 
@@ -177,16 +185,19 @@ dist : doc
 	  $(DISTNAME)/*.c \
 	  $(DISTNAME)/testsuite/check.sh \
 	  $(DISTNAME)/testsuite/test.txt \
-	  $(DISTNAME)/testsuite/test2.txt \
+	  $(DISTNAME)/testsuite/fox_lf \
+	  $(DISTNAME)/testsuite/fox.lz \
+	  $(DISTNAME)/testsuite/fox_*.lz \
 	  $(DISTNAME)/testsuite/test_sync.lz \
-	  $(DISTNAME)/testsuite/test.txt.lz
+	  $(DISTNAME)/testsuite/test.txt.lz \
+	  $(DISTNAME)/testsuite/test_em.txt.lz
 	rm -f $(DISTNAME)
 	lzip -v -9 $(DISTNAME).tar
 
 clean :
-	-rm -f $(progname) $(objs)
-	-rm -f $(progname)_shared lzlib_sh.o *.so.$(pkgversion)
-	-rm -f bbexample bbexample.o lzcheck lzcheck.o lzlib.o *.a
+	-rm -f $(progname) $(objs) lzlib.o lib$(libname).a
+	-rm -f $(progname)_shared lzlib_sh.o lib$(libname).so*
+	-rm -f bbexample bbexample.o ffexample ffexample.o lzcheck lzcheck.o
 
 distclean : clean
 	-rm -f Makefile config.status *.tar *.tar.lz

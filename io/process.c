@@ -404,6 +404,7 @@ QUICKBMS_int add_var(QUICKBMS_int idx, u8 *name, u8 *val, QUICKBMS_int val32, QU
 
 
 int quickbms_debug_context(DEBUG_EVENT *dbg) {
+#if defined(i386)
     CONTEXT ctx;
     HANDLE  ht,
             hp;
@@ -450,6 +451,7 @@ int quickbms_debug_context(DEBUG_EVENT *dbg) {
         }
     }
     CloseHandle(ht);
+#endif
     return 0;
 }
 

@@ -71,7 +71,7 @@ namespace Ppmz2
 
 			        _gotDContext->match ++;
 
-			        i = ((unsigned long)n) - (unsigned long)(_nodeArray);
+			        i = ((intptr_t)n) - (intptr_t)(_nodeArray);
 			        if ( i == (NodeArraySize-1)*sizeof(PPMDetNode) )
 				        _nextNode = _nodeArray;
 			        else

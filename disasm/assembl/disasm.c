@@ -59,7 +59,7 @@ void *assemble_strlwr(void *str) {
     return(str);
 }
 
-int mymemicmp(const void *buf1, const void *buf2, int count) {
+int disasm_memicmp(const void *buf1, const void *buf2, int count) {
 #ifdef WIN32
     return(strnicmp(buf1, buf2, count));
 #else
@@ -540,7 +540,7 @@ static void DecodeVX(void) {
   if (da->immconst==0)
     da->immconst=data;
   if (mode>=DISASM_FILE && da->error==DAE_NOERR) {
-    if ((data & 0x00008000)!=0 && mymemicmp("VxDCall",da->result,7)==0)
+    if ((data & 0x00008000)!=0 && disasm_memicmp("VxDCall",da->result,7)==0)
       memcpy(da->result,lowercase?"vxdjump":"VxDJump",7);
     nresult+=sprintf(da->result+nresult,"%lX",data);
   };

@@ -4,7 +4,7 @@ by Luigi Auriemma
 e-mail: aluigi@autistici.org
 web:    aluigi.org
 
-    Copyright 2006-2018 Luigi Auriemma
+    Copyright 2006-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -68,14 +68,14 @@ web:    aluigi.org
     #include <netinet/in.h>
     #include <netdb.h>
     #include <sys/times.h>
-    #include <sys/timeb.h>
+    //#include <sys/timeb.h>
     #include <dirent.h>
     #define PATHSLASH   '/'
     #define make_dir(x) mkdir(x, 0755)
     #define stricmp     strcasecmp
     #define strnicmp    strncasecmp
-    #define MYDOWN_TEMPOZ1     ftime(&timex)
-    #define MYDOWN_TEMPOZ2     ((timex.time * 1000) + timex.millitm)
+    #define MYDOWN_TEMPOZ1     gettimeofday(&timex, NULL) //ftime(&timex)
+    #define MYDOWN_TEMPOZ2     ((timex.tv_sec * 1000) + (timex.tv_usec / 1000)) //((timex.time * 1000) + timex.millitm)
     #define ONESEC      1
 #endif
 
@@ -661,7 +661,8 @@ void mydown_filename_clean(u8 *fname) {
 
 u64 mydown_http2file(int *keep_alive, int timeout, u8 *host, u16 port, u8 *user, u8 *pass, u8 *referer, u8 *useragent, u8 *cookie, u8 *more_http, int verbose, u8 *getstr, FILE *fd, u8 *filename, int showhead, int onlyifdiff, int resume, u64 from, u64 tot, u64 *filesize, u8 **filedata, int *ret_code, int onflyunzip, u8 *content, u64 contentsize, u8 *get, u8 *proxy, u16 proxy_port, mydown_options *opt) {
 #ifndef WIN32
-    struct  timeb   timex;
+    //struct  timeb   timex;
+    struct  timeval timex;
 #endif
     static struct linger ling = {1,1};
     z_stream    z;

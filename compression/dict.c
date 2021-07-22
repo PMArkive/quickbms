@@ -32,7 +32,7 @@ typedef struct
     unsigned len;     // длина слова
     byte *ptr;        // начало слова
 } dict_entry;
-dict_entry dict[UCHAR_MAX+1];
+static dict_entry dict[UCHAR_MAX+1];
 
 #define dict_get_byte()       (*ptr++)
 #define dict_put_byte(c)      (*outptr++ = (c))

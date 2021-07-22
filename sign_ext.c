@@ -2969,7 +2969,9 @@ unsigned char *sign_ext(unsigned char *data, int datalen) {
                     }
                 }
             }
-            if((datalen > 18) && !memcmp(data + datalen - 18, "TRUEVISION-XFILE.\0", 18)) return("tga");
+            // better to disable them
+            //if((datalen > 18) && !memcmp(data + datalen - 18, "TRUEVISION-XFILE.\0", 18)) return("tga");
+            //if((datalen >  4) && !memcmp(data + datalen -  4, "\xc1\x83\x2a\x9e",     4)) return("uexp");
             if(!strnicmp(data, "<?xml", 5)) return("xml");
             if(!strnicmp(data, "<html", 5)) return("htm");
             if(!strnicmp(data, "<DOC",  4)) return("htm");

@@ -249,49 +249,15 @@ KB_debuglog(0, "%04d\t0x%04X:%01X\t", pos, byte_pos, bit_pos);
 
 
 
-int DOS_LZW(char *dst, int dst_max, char *src, int src_len) {
+static char *dst;
+static int dst_max;
+static int step = 9;	/* Bits per step */
+static int err = 0; /* Loop breaker */
+static unsigned long total_bits = 0; /* Position in bits */
+static	int dst_len = 0; /* Position in bytes / Bytes written */
+static	int bit_pos = 0; /* Extra shift in bits */
 
-static const int DICT_START =  	0x0102;
-static const int DICT_BOUNDRY =	0x0200;
-static const int MAX_BITS =	12;
-static const int CMD_RESET =	0x0100;
-static const int CMD_END = 	0x0101;
-
-#define MAX_DICT_SIZE (sizeof(dict_t) * (DICT_BOUNDRY * 128 + 1))
-
-typedef struct {   
-	word next[256];
-} dict_t;
-
-
-	/*
-	 * The data is kept in BIT-positioned "blocks".
-	 * We use several variables to iterate it with some
-	 * level of sanity:
-	 */
-	unsigned long total_bits = 0; /* Position in bits */
-
-	int dst_len = 0; /* Position in bytes / Bytes written */
-	int bit_pos = 0; /* Extra shift in bits */
-	/*
-	 * Each "block" can take from 9 to 12 bits of data.
-	 * Last 8 bits are "the value"
-	 * First N bits are "the key"
-	 */
-	int step = 9;	/* Bits per step */
-
-	dict_t *dict;
-	word    dict_index = 0x0102; /* Start populating dictionary from 0x0102 */
-	word    dict_range = 0x0200; /* Allow that much entries before increasing step */
-
-	word last_value;	/* value from previous iteration */
-	//byte next_value;	/* value we currently examine */
-	int err = 0; /* Loop breaker */
-
-	dict = malloc(MAX_DICT_SIZE);
-	memset(dict, 0, MAX_DICT_SIZE);
-
-	inline void write_bits(word x) {
+	static void write_bits(word x) {
 		word24 big_index = 0;
 //printf("[%d] Wrote value: %08x\n", dst_len, x);
 		/* See if buffer is large enough */
@@ -320,6 +286,52 @@ typedef struct {
 		dst_len = total_bits / 8;
 		bit_pos = total_bits % 8;
 	}
+
+
+
+int DOS_LZW(char *_dst, int _dst_max, char *src, int src_len) {
+
+static const int DICT_START =  	0x0102;
+static const int DICT_BOUNDRY =	0x0200;
+static const int MAX_BITS =	12;
+static const int CMD_RESET =	0x0100;
+static const int CMD_END = 	0x0101;
+
+#define MAX_DICT_SIZE (sizeof(dict_t) * (DICT_BOUNDRY * 128 + 1))
+
+typedef struct {   
+	word next[256];
+} dict_t;
+
+
+	/*
+	 * The data is kept in BIT-positioned "blocks".
+	 * We use several variables to iterate it with some
+	 * level of sanity:
+	 */
+	total_bits = 0; /* Position in bits */
+
+    dst = _dst;
+    dst_max = _dst_max;
+	dst_len = 0; /* Position in bytes / Bytes written */
+	bit_pos = 0; /* Extra shift in bits */
+	/*
+	 * Each "block" can take from 9 to 12 bits of data.
+	 * Last 8 bits are "the value"
+	 * First N bits are "the key"
+	 */
+	step = 9;	/* Bits per step */
+
+	dict_t *dict;
+	word    dict_index = 0x0102; /* Start populating dictionary from 0x0102 */
+	word    dict_range = 0x0200; /* Allow that much entries before increasing step */
+
+	word last_value;	/* value from previous iteration */
+	//byte next_value;	/* value we currently examine */
+	err = 0; /* Loop breaker */
+
+	dict = malloc(MAX_DICT_SIZE);
+	memset(dict, 0, MAX_DICT_SIZE);
 
 	write_bits(CMD_RESET);
 

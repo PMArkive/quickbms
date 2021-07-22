@@ -1,24 +1,24 @@
-/*  Minilzip - Test program for the lzlib library
-    Copyright (C) 2009-2019 Antonio Diaz Diaz.
+/* Minilzip - Test program for the library lzlib
+   Copyright (C) 2009-2021 Antonio Diaz Diaz.
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 2 of the License, or
-    (at your option) any later version.
+   This program is free software: you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation, either version 2 of the License, or
+   (at your option) any later version.
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+   You should have received a copy of the GNU General Public License
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 /*
-    Exit status: 0 for a normal exit, 1 for environmental problems
-    (file not found, invalid flags, I/O errors, etc), 2 to indicate a
-    corrupt or invalid input file, 3 for an internal consistency error
-    (eg, bug) which caused minilzip to panic.
+   Exit status: 0 for a normal exit, 1 for environmental problems
+   (file not found, invalid flags, I/O errors, etc), 2 to indicate a
+   corrupt or invalid input file, 3 for an internal consistency error
+   (eg, bug) which caused minilzip to panic.
 */
 
 #define _FILE_OFFSET_BITS 64
@@ -74,19 +74,21 @@
   #define min(x,y) ((x) <= (y) ? (x) : (y))
 #endif
 
-void cleanup_and_fail( const int retval );
-void show_error( const char * const msg, const int errcode, const bool help );
-void show_file_error( const char * const filename, const char * const msg,
-                      const int errcode );
-void internal_error( const char * const msg );
+static void cleanup_and_fail( const int retval );
+static void show_error( const char * const msg, const int errcode,
+                        const bool help );
+static void show_file_error( const char * const filename,
+                             const char * const msg, const int errcode );
+static void internal_error( const char * const msg );
+static const char * const mem_msg = "Not enough memory.";
 
 int verbosity = 0;
 
-const char * const program_name = "minilzip";
-const char * const program_year = "2019";
-const char * invocation_name = 0;
+static const char * const program_name = "minilzip";
+static const char * const program_year = "2021";
+static const char * invocation_name = "minilzip";	/* default value */
 
-const struct { const char * from; const char * to; } known_extensions[] = {
+static const struct { const char * from; const char * to; } known_extensions[] = {
   { ".lz",  ""     },
   { ".tlz", ".tar" },
   { 0,      0      } };
@@ -101,15 +103,24 @@ enum Mode { m_compress, m_decompress, m_test };
 
 /* Variables used in signal handler context.
    They are not declared volatile because the handler never returns. */
-char * output_filename = 0;
-int outfd = -1;
-bool delete_output_on_interrupt = false;
+static char * output_filename = 0;
+static int outfd = -1;
+static bool delete_output_on_interrupt = false;
 
 
 static void show_help( void )
   {
-  printf( "Minilzip is a test program for the lzlib compression library, fully\n"
+  printf( "Minilzip is a test program for the compression library lzlib, fully\n"
           "compatible with lzip 1.4 or newer.\n"
+          "\nLzip is a lossless data compressor with a user interface similar to the one\n"
+          "of gzip or bzip2. Lzip uses a simplified form of the 'Lempel-Ziv-Markov\n"
+          "chain-Algorithm' (LZMA) stream format, chosen to maximize safety and\n"
+          "interoperability. Lzip can compress about as fast as gzip (lzip -0) or\n"
+          "compress most files more than bzip2 (lzip -9). Decompression speed is\n"
+          "intermediate between gzip and bzip2. Lzip is better than gzip and bzip2 from\n"
+          "a data recovery perspective. Lzip has been designed, written, and tested\n"
+          "with great care to replace gzip and bzip2 as the standard general-purpose\n"
+          "compressed format for unix-like systems.\n"
           "\nUsage: %s [options] [files]\n", invocation_name );
   printf( "\nOptions:\n"
           "  -h, --help                     display this help and exit\n"
@@ -122,7 +133,7 @@ static void show_help( void )
           "  -F, --recompress               force re-compression of compressed files\n"
           "  -k, --keep                     keep (don't delete) input files\n"
           "  -m, --match-length=<bytes>     set match length limit in bytes [36]\n"
-          "  -o, --output=<file>            if reading standard input, write to <file>\n"
+          "  -o, --output=<file>            write to <file>, keep input files\n"
           "  -q, --quiet                    suppress all messages\n"
           "  -s, --dictionary-size=<bytes>  set dictionary size limit in bytes [8 MiB]\n"
           "  -S, --volume-size=<bytes>      set volume size limit in bytes\n"
@@ -132,7 +143,8 @@ static void show_help( void )
           "      --fast                     alias for -0\n"
           "      --best                     alias for -9\n"
           "      --loose-trailing           allow trailing data seeming corrupt header\n"
-          "If no file names are given, or if a file is '-', minilzip compresses or\n"
+          "      --check-lib                compare version of lzlib.h with liblz.{a,so}\n"
+          "\nIf no file names are given, or if a file is '-', minilzip compresses or\n"
           "decompresses from standard input to standard output.\n"
           "Numbers may be followed by a multiplier: k = kB = 10^3 = 1000,\n"
           "Ki = KiB = 2^10 = 1024, M = 10^6, Mi = 2^20, G = 10^9, Gi = 2^30, etc...\n"
@@ -140,12 +152,19 @@ static void show_help( void )
           "to 2^29 bytes.\n"
           "\nThe bidimensional parameter space of LZMA can't be mapped to a linear\n"
           "scale optimal for all files. If your files are large, very repetitive,\n"
-          "etc, you may need to use the --dictionary-size and --match-length\n"
-          "options directly to achieve optimal performance.\n"
+          "etc, you may need to use the options --dictionary-size and --match-length\n"
+          "directly to achieve optimal performance.\n"
+          "\nTo extract all the files from archive 'foo.tar.lz', use the commands\n"
+          "'tar -xf foo.tar.lz' or 'minilzip -cd foo.tar.lz | tar -xf -'.\n"
           "\nExit status: 0 for a normal exit, 1 for environmental problems (file\n"
           "not found, invalid flags, I/O errors, etc), 2 to indicate a corrupt or\n"
           "invalid input file, 3 for an internal consistency error (eg, bug) which\n"
           "caused minilzip to panic.\n"
+          "\nThe ideas embodied in lzlib are due to (at least) the following people:\n"
+          "Abraham Lempel and Jacob Ziv (for the LZ algorithm), Andrey Markov (for the\n"
+          "definition of Markov chains), G.N.N. Martin (for the definition of range\n"
+          "encoding), Igor Pavlov (for putting all the above together in LZMA), and\n"
+          "Julian Seward (for bzip2's CLI).\n"
           "\nReport bugs to lzip-bug@nongnu.org\n"
           "Lzlib home page: http://www.nongnu.org/lzip/lzlib.html\n" );
   }
@@ -162,16 +181,43 @@ static void show_version( void )
   }
 
 
+int check_lib()
+  {
+  bool warning = false;
+  if( strcmp( LZ_version_string, LZ_version() ) != 0 )
+    { warning = true;
+      if( verbosity >= 0 )
+        printf( "warning: LZ_version_string != LZ_version() (%s vs %s)\n",
+                LZ_version_string, LZ_version() ); }
+#if defined LZ_API_VERSION && LZ_API_VERSION >= 1012
+  if( LZ_API_VERSION != LZ_api_version() )
+    { warning = true;
+      if( verbosity >= 0 )
+        printf( "warning: LZ_API_VERSION != LZ_api_version() (%u vs %u)\n",
+                LZ_API_VERSION, LZ_api_version() ); }
+#endif
+  if( verbosity >= 1 )
+    {
+    printf( "Using lzlib %s\n", LZ_version() );
+#if !defined LZ_API_VERSION
+    fputs( "LZ_API_VERSION is not defined.\n", stdout );
+#elif LZ_API_VERSION >= 1012
+    printf( "Using LZ_API_VERSION = %u\n", LZ_api_version() );
+#else
+    printf( "Compiled with LZ_API_VERSION = %u. "
+            "Using an unknown LZ_API_VERSION\n", LZ_API_VERSION );
+#endif
+    }
+  return warning;
+  }
+
+
 /* assure at least a minimum size for buffer 'buf' */
 static void * resize_buffer( void * buf, const unsigned min_size )
   {
   if( buf ) buf = realloc( buf, min_size );
   else buf = malloc( min_size );
-  if( !buf )
-    {
-    show_error( "Not enough memory.", 0, false );
-    cleanup_and_fail( 1 );
-    }
+  if( !buf ) { show_error( mem_msg, 0, false ); cleanup_and_fail( 1 ); }
   return buf;
   }
 
@@ -186,8 +232,7 @@ struct Pretty_print
   };
 
 static void Pp_init( struct Pretty_print * const pp,
-                     const char * const filenames[],
-                     const int num_filenames )
+                     const char * const filenames[], const int num_filenames )
   {
   unsigned stdin_name_len;
   int i;
@@ -208,8 +253,8 @@ static void Pp_init( struct Pretty_print * const pp,
   if( pp->longest_name == 0 ) pp->longest_name = stdin_name_len;
   }
 
-static inline void Pp_set_name( struct Pretty_print * const pp,
-                                const char * const filename )
+static void Pp_set_name( struct Pretty_print * const pp,
+                         const char * const filename )
   {
   unsigned name_len, padded_name_len, i = 0;
 
@@ -227,7 +272,7 @@ static inline void Pp_set_name( struct Pretty_print * const pp,
   pp->first_post = true;
   }
 
-static inline void Pp_reset( struct Pretty_print * const pp )
+static void Pp_reset( struct Pretty_print * const pp )
   { if( pp->name && pp->name[0] ) pp->first_post = true; }
 
 static void Pp_show_msg( struct Pretty_print * const pp, const char * const msg )
@@ -258,7 +303,7 @@ static void show_header( const unsigned dictionary_size )
   int i; for( i = 0; i < 8 && ( num > 9999 || ( exact && num >= factor ) ); ++i )
     { num /= factor; if( num % factor != 0 ) exact = false;
       p = prefix[i]; np = ""; }
-  fprintf( stderr, "dictionary %s%4u %sB, ", np, num, p );
+  fprintf( stderr, "dict %s%4u %sB, ", np, num, p );
   }
 
 
@@ -321,7 +366,7 @@ static int get_dict_size( const char * const arg )
   const long bits = strtol( arg, &tail, 0 );
   if( bits >= LZ_min_dictionary_bits() &&
       bits <= LZ_max_dictionary_bits() && *tail == 0 )
-    return ( 1 << bits );
+    return 1 << bits;
   dictionary_size = getnum( arg, LZ_min_dictionary_size(),
                                  LZ_max_dictionary_size() );
   if( dictionary_size == 65535 ) ++dictionary_size;	/* no fast encoder */
@@ -329,7 +374,7 @@ static int get_dict_size( const char * const arg )
   }
 
 
-void set_mode( enum Mode * const program_modep, const enum Mode new_mode )
+static void set_mode( enum Mode * const program_modep, const enum Mode new_mode )
   {
   if( *program_modep != m_compress && *program_modep != new_mode )
     {
@@ -363,7 +408,7 @@ static void set_c_outname( const char * const name, const bool force_ext,
                                    strlen( known_extensions[0].from ) + 1 );
   strcpy( output_filename, name );
   if( multifile ) strcat( output_filename, "00001" );
-  if( force_ext || multifile || extension_index( output_filename ) < 0 )
+  if( force_ext || multifile )
     strcat( output_filename, known_extensions[0].from );
   }
 
@@ -395,7 +440,7 @@ static void set_d_outname( const char * const name, const int eindex )
 
 static int open_instream( const char * const name, struct stat * const in_statsp,
                           const enum Mode program_mode, const int eindex,
-                          const bool recompress, const bool to_stdout )
+                          const bool one_to_one, const bool recompress )
   {
   int infd = -1;
   if( program_mode == m_compress && !recompress && eindex >= 0 )
@@ -416,14 +461,12 @@ static int open_instream( const char * const name, struct stat * const in_statsp
       const bool can_read = ( i == 0 &&
                               ( S_ISBLK( mode ) || S_ISCHR( mode ) ||
                                 S_ISFIFO( mode ) || S_ISSOCK( mode ) ) );
-      const bool no_ofile = ( to_stdout || program_mode == m_test );
-      if( i != 0 || ( !S_ISREG( mode ) && ( !can_read || !no_ofile ) ) )
+      if( i != 0 || ( !S_ISREG( mode ) && ( !can_read || one_to_one ) ) )
         {
         if( verbosity >= 0 )
           fprintf( stderr, "%s: Input file '%s' is not a regular file%s.\n",
-                   program_name, name,
-                   ( can_read && !no_ofile ) ?
-                   ",\n          and '--stdout' was not specified" : "" );
+                   program_name, name, ( can_read && one_to_one ) ?
+                   ",\n          and neither '-c' nor '-o' were specified" : "" );
         close( infd );
         infd = -1;
         }
@@ -433,11 +476,11 @@ static int open_instream( const char * const name, struct stat * const in_statsp
   }
 
 
-static bool open_outstream( const bool force, const bool from_stdin )
+static bool open_outstream( const bool force, const bool protect )
   {
   const mode_t usr_rw = S_IRUSR | S_IWUSR;
   const mode_t all_rw = usr_rw | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
-  const mode_t outfd_mode = from_stdin ? all_rw : usr_rw;
+  const mode_t outfd_mode = protect ? usr_rw : all_rw;
   int flags = O_CREAT | O_WRONLY | O_BINARY;
   if( force ) flags |= O_TRUNC; else flags |= O_EXCL;
 
@@ -456,25 +499,6 @@ static bool open_outstream( const bool force, const bool from_stdin )
   }
 
 
-static bool check_tty( const char * const input_filename, const int infd,
-                       const enum Mode program_mode )
-  {
-  if( program_mode == m_compress && isatty( outfd ) )
-    {
-    show_error( "I won't write compressed data to a terminal.", 0, true );
-    return false;
-    }
-  if( ( program_mode == m_decompress || program_mode == m_test ) &&
-      isatty( infd ) )
-    {
-    show_file_error( input_filename,
-                     "I won't read compressed data from a terminal.", 0 );
-    return false;
-    }
-  return true;
-  }
-
-
 static void set_signals( void (*action)(int) )
   {
   signal( SIGHUP, action );
@@ -483,7 +507,7 @@ static void set_signals( void (*action)(int) )
   }
 
 
-void cleanup_and_fail( const int retval )
+static void cleanup_and_fail( const int retval )
   {
   set_signals( SIG_IGN );			/* ignore signals */
   if( delete_output_on_interrupt )
@@ -500,7 +524,7 @@ void cleanup_and_fail( const int retval )
   }
 
 
-void signal_handler( int sig )
+static void signal_handler( int sig )
   {
   if( sig ) {}				/* keep compiler happy */
   show_error( "Control-C or similar caught, quitting.", 0, false );
@@ -508,7 +532,35 @@ void signal_handler( int sig )
   }
 
 
-     /* Set permissions, owner and times. */
+static inline void set_retval( int * retval, const int new_val )
+  { if( *retval < new_val ) *retval = new_val; }
+
+
+static bool check_tty_in( const char * const input_filename, const int infd,
+                          const enum Mode program_mode, int * const retval )
+  {
+  if( ( program_mode == m_decompress || program_mode == m_test ) &&
+      isatty( infd ) )				/* for example /dev/tty */
+    { show_file_error( input_filename,
+                       "I won't read compressed data from a terminal.", 0 );
+      close( infd ); set_retval( retval, 1 );
+      if( program_mode != m_test ) cleanup_and_fail( *retval );
+      return false; }
+  return true;
+  }
+
+static bool check_tty_out( const enum Mode program_mode )
+  {
+  if( program_mode == m_compress && isatty( outfd ) )
+    { show_file_error( output_filename[0] ?
+                       output_filename : "(stdout)",
+                       "I won't write compressed data to a terminal.", 0 );
+      return false; }
+  return true;
+  }
+
+
+/* Set permissions, owner, and times. */
 static void close_and_set_permissions( const struct stat * const in_statsp )
   {
   bool warning = false;
@@ -602,7 +654,7 @@ static int do_compress( struct LZ_Encoder * const encoder,
   {
   unsigned long long partial_volume_size = 0;
   enum { buffer_size = 65536 };
-  uint8_t buffer[buffer_size];
+  uint8_t buffer[buffer_size];			/* read/write buffer */
   if( verbosity >= 1 ) Pp_show_msg( pp, 0 );
 
   while( true )
@@ -658,7 +710,7 @@ static int do_compress( struct LZ_Encoder * const encoder,
             close_and_set_permissions( in_statsp );
             if( !next_filename() )
               { Pp_show_msg( pp, "Too many volume files." ); return 1; }
-            if( !open_outstream( true, !in_statsp ) ) return 1;
+            if( !open_outstream( true, in_statsp ) ) return 1;
             }
           }
         size = min( member_size, volume_size - partial_volume_size );
@@ -726,7 +778,8 @@ static int do_decompress( struct LZ_Decoder * const decoder, const int infd,
                 const bool loose_trailing, const bool testing )
   {
   enum { buffer_size = 65536 };
-  uint8_t buffer[buffer_size];
+  uint8_t buffer[buffer_size];			/* read/write buffer */
+  unsigned long long total_in = 0;		/* to detect library stall */
   bool first_member;
 
   for( first_member = true; ; )
@@ -777,17 +830,16 @@ static int do_decompress( struct LZ_Decoder * const decoder, const int infd,
             if( verbosity >= 4 )
               show_header( LZ_decompress_dictionary_size( decoder ) );
             if( data_size == 0 || member_size == 0 )
-              fputs( "no data compressed.  ", stderr );
+              fputs( "no data compressed. ", stderr );
             else
-              fprintf( stderr, "%6.3f:1, %5.2f%% ratio, %5.2f%% saved.  ",
+              fprintf( stderr, "%6.3f:1, %5.2f%% ratio, %5.2f%% saved. ",
                      (double)data_size / member_size,
                      ( 100.0 * member_size ) / data_size,
                      100.0 - ( ( 100.0 * member_size ) / data_size ) );
             if( verbosity >= 4 )
               fprintf( stderr, "CRC %08X, ", LZ_decompress_data_crc( decoder ) );
             if( verbosity >= 3 )
-              fprintf( stderr, "decompressed %9llu, compressed %8llu.  ",
-                       data_size, member_size );
+              fprintf( stderr, "%9llu out, %8llu in. ", data_size, member_size );
             fputs( testing ? "ok\n" : "done\n", stderr ); Pp_reset( pp );
             }
           }
@@ -840,8 +892,7 @@ static int do_decompress( struct LZ_Decoder * const decoder, const int infd,
         else break;				/* trailing data */
         return 2;
         }
-      if( lz_errno == LZ_mem_error )
-        { Pp_show_msg( pp, "Not enough memory." ); return 1; }
+      if( lz_errno == LZ_mem_error ) { Pp_show_msg( pp, mem_msg ); return 1; }
       if( verbosity >= 0 )
         {
         Pp_show_msg( pp, 0 );
@@ -853,7 +904,11 @@ static int do_decompress( struct LZ_Decoder * const decoder, const int infd,
       }
     if( LZ_decompress_finished( decoder ) == 1 ) break;
     if( in_size == 0 && out_size == 0 )
-      internal_error( "library error (stalled)." );
+      {
+      const unsigned long long size = LZ_decompress_total_in_size( decoder );
+      if( total_in == size ) internal_error( "library error (stalled)." );
+      total_in = size;
+      }
     }
   if( verbosity == 1 ) fputs( testing ? "ok\n" : "done\n", stderr );
   return 0;
@@ -868,7 +923,7 @@ static int decompress( const int infd, struct Pretty_print * const pp,
   int retval;
 
   if( !decoder || LZ_decompress_errno( decoder ) != LZ_ok )
-    { Pp_show_msg( pp, "Not enough memory." ); retval = 1; }
+    { Pp_show_msg( pp, mem_msg ); retval = 1; }
   else retval = do_decompress( decoder, infd, pp, ignore_trailing,
                                loose_trailing, testing );
   LZ_decompress_close( decoder );
@@ -876,7 +931,8 @@ static int decompress( const int infd, struct Pretty_print * const pp,
   }
 
 
-void show_error( const char * const msg, const int errcode, const bool help )
+static void show_error( const char * const msg, const int errcode,
+                        const bool help )
   {
   if( verbosity < 0 ) return;
   if( msg && msg[0] )
@@ -889,8 +945,8 @@ void show_error( const char * const msg, const int errcode, const bool help )
   }
 
 
-void show_file_error( const char * const filename, const char * const msg,
-                      const int errcode )
+static void show_file_error( const char * const filename,
+                             const char * const msg, const int errcode )
   {
   if( verbosity >= 0 )
     fprintf( stderr, "%s: %s: %s%s%s\n", program_name, filename, msg,
@@ -899,7 +955,7 @@ void show_file_error( const char * const filename, const char * const msg,
   }
 
 
-void internal_error( const char * const msg )
+static void internal_error( const char * const msg )
   {
   if( verbosity >= 0 )
     fprintf( stderr, "%s: internal error: %s\n", program_name, msg );
@@ -924,12 +980,14 @@ int main( const int argc, const char * const argv[] )
     { 3 << 23, 132 },		/* -8 */
     { 1 << 25, 273 } };		/* -9 */
   struct Lzma_options encoder_options = option_mapping[6];  /* default = "-6" */
-  const unsigned long long max_member_size = 0x0008000000000000ULL;
-  const unsigned long long max_volume_size = 0x4000000000000000ULL;
+  const unsigned long long max_member_size = 0x0008000000000000ULL; /* 2 PiB */
+  const unsigned long long max_volume_size = 0x4000000000000000ULL; /* 4 EiB */
   unsigned long long member_size = max_member_size;
   unsigned long long volume_size = 0;
   const char * default_output_filename = "";
-  const char ** filenames = 0;
+  static struct Arg_parser parser;	/* static because valgrind complains */
+  static struct Pretty_print pp;	/* and memory management in C sucks */
+  static const char ** filenames = 0;
   int num_filenames = 0;
   enum Mode program_mode = m_compress;
   int argind = 0;
@@ -944,20 +1002,19 @@ int main( const int argc, const char * const argv[] )
   bool recompress = false;
   bool stdin_used = false;
   bool to_stdout = false;
-  struct Pretty_print pp;
 
-  enum { opt_lt = 256 };
+  enum { opt_chk = 256, opt_lt };
   const struct ap_Option options[] =
     {
     { '0', "fast",              ap_no  },
-    { '1',  0,                  ap_no  },
-    { '2',  0,                  ap_no  },
-    { '3',  0,                  ap_no  },
-    { '4',  0,                  ap_no  },
-    { '5',  0,                  ap_no  },
-    { '6',  0,                  ap_no  },
-    { '7',  0,                  ap_no  },
-    { '8',  0,                  ap_no  },
+    { '1', 0,                   ap_no  },
+    { '2', 0,                   ap_no  },
+    { '3', 0,                   ap_no  },
+    { '4', 0,                   ap_no  },
+    { '5', 0,                   ap_no  },
+    { '6', 0,                   ap_no  },
+    { '7', 0,                   ap_no  },
+    { '8', 0,                   ap_no  },
     { '9', "best",              ap_no  },
     { 'a', "trailing-error",    ap_no  },
     { 'b', "member-size",       ap_yes },
@@ -976,20 +1033,14 @@ int main( const int argc, const char * const argv[] )
     { 't', "test",              ap_no  },
     { 'v', "verbose",           ap_no  },
     { 'V', "version",           ap_no  },
+    { opt_chk, "check-lib",     ap_no  },
     { opt_lt, "loose-trailing", ap_no  },
-    {  0 , 0,                   ap_no  } };
+    {  0, 0,                    ap_no  } };
 
-  struct Arg_parser parser;
-
-  invocation_name = argv[0];
-
-  if( LZ_version()[0] != LZ_version_string[0] )
-    internal_error( "bad library version." );
-  if( strcmp( PROGVERSION, LZ_version_string ) != 0 )
-    internal_error( "bad library version_string." );
+  if( argc > 0 ) invocation_name = argv[0];
 
   if( !ap_init( &parser, argc, argv, options, 0 ) )
-    { show_error( "Not enough memory.", 0, false ); return 1; }
+    { show_error( mem_msg, 0, false ); return 1; }
   if( ap_error( &parser ) )				/* bad option */
     { show_error( ap_error( &parser ), 0, true ); return 1; }
 
@@ -1015,7 +1066,8 @@ int main( const int argc, const char * const argv[] )
                   getnum( arg, LZ_min_match_len_limit(),
                                LZ_max_match_len_limit() ); break;
       case 'n': break;
-      case 'o': default_output_filename = arg; break;
+      case 'o': if( strcmp( arg, "-" ) == 0 ) to_stdout = true;
+                else { default_output_filename = arg; } break;
       case 'q': verbosity = -1; break;
       case 's': encoder_options.dictionary_size = get_dict_size( arg );
                 break;
@@ -1023,10 +1075,26 @@ int main( const int argc, const char * const argv[] )
       case 't': set_mode( &program_mode, m_test ); break;
       case 'v': if( verbosity < 4 ) ++verbosity; break;
       case 'V': show_version(); return 0;
+      case opt_chk: return check_lib();
       case opt_lt: loose_trailing = true; break;
       default : internal_error( "uncaught option." );
       }
     } /* end process options */
+
+  if( strcmp( PROGVERSION, LZ_version_string ) != 0 )
+    internal_error( "wrong PROGVERSION." );
+#if !defined LZ_API_VERSION || LZ_API_VERSION < 1012
+#error "lzlib 1.12 or newer needed."
+#else
+  if( LZ_api_version() < 1012 )	/* minilzip passes null to LZ_decompress_read */
+    { show_error( "lzlib 1.12 or newer needed. Try --check-lib.", 0, false );
+      return 1; }
+  if( LZ_api_version() != LZ_API_VERSION ) show_error(
+    "warning: wrong library API version. Try --check-lib.", 0, false );
+  else
+#endif
+  if( strcmp( LZ_version_string, LZ_version() ) != 0 ) show_error(
+    "warning: wrong library version_string. Try --check-lib.", 0, false );
 
 #if defined(__MSVCRT__) || defined(__OS2__) || defined(__DJGPP__)
   setmode( STDIN_FILENO, O_BINARY );
@@ -1043,16 +1111,31 @@ int main( const int argc, const char * const argv[] )
     if( strcmp( filenames[i], "-" ) != 0 ) filenames_given = true;
     }
 
-  if( program_mode == m_test )
-    outfd = -1;
+  if( program_mode == m_compress )
+    {
+    if( volume_size > 0 && !to_stdout && default_output_filename[0] &&
+        num_filenames > 1 )
+      { show_error( "Only can compress one file when using '-o' and '-S'.",
+                    0, true ); return 1; }
+    }
+  else volume_size = 0;
+  if( program_mode == m_test ) to_stdout = false;	/* apply overrides */
+  if( program_mode == m_test || to_stdout ) default_output_filename = "";
 
-  if( !to_stdout && program_mode != m_test &&
-      ( filenames_given || default_output_filename[0] ) )
+  output_filename = resize_buffer( output_filename, 1 );
+  output_filename[0] = 0;
+  if( to_stdout && program_mode != m_test )	/* check tty only once */
+    { outfd = STDOUT_FILENO; if( !check_tty_out( program_mode ) ) return 1; }
+  else outfd = -1;
+
+  const bool to_file = !to_stdout && program_mode != m_test &&
+                       default_output_filename[0];
+  if( !to_stdout && program_mode != m_test && ( filenames_given || to_file ) )
     set_signals( signal_handler );
 
   Pp_init( &pp, filenames, num_filenames );
 
-  output_filename = resize_buffer( output_filename, 1 );
+  const bool one_to_one = !to_stdout && program_mode != m_test && !to_file;
   for( i = 0; i < num_filenames; ++i )
     {
     const char * input_filename = "";
@@ -1060,68 +1143,48 @@ int main( const int argc, const char * const argv[] )
     int tmp;
     struct stat in_stats;
     const struct stat * in_statsp;
-    output_filename[0] = 0;
 
-    if( !filenames[i][0] || strcmp( filenames[i], "-" ) == 0 )
+    Pp_set_name( &pp, filenames[i] );
+    if( strcmp( filenames[i], "-" ) == 0 )
       {
       if( stdin_used ) continue; else stdin_used = true;
       infd = STDIN_FILENO;
-      if( program_mode != m_test )
-        {
-        if( to_stdout || !default_output_filename[0] )
-          outfd = STDOUT_FILENO;
-        else
-          {
-          if( program_mode == m_compress )
-            set_c_outname( default_output_filename, false, volume_size > 0 );
-          else
-            {
-            output_filename = resize_buffer( output_filename,
-                                strlen( default_output_filename ) + 1 );
-            strcpy( output_filename, default_output_filename );
-            }
-          if( !open_outstream( force, true ) )
-            {
-            if( retval < 1 ) retval = 1;
-            close( infd );
-            continue;
-            }
-          }
-        }
+      if( !check_tty_in( pp.name, infd, program_mode, &retval ) ) continue;
+      if( one_to_one ) { outfd = STDOUT_FILENO; output_filename[0] = 0; }
       }
     else
       {
       const int eindex = extension_index( input_filename = filenames[i] );
       infd = open_instream( input_filename, &in_stats, program_mode,
-                            eindex, recompress, to_stdout );
-      if( infd < 0 ) { if( retval < 1 ) retval = 1; continue; }
-      if( program_mode != m_test )
+                            eindex, one_to_one, recompress );
+      if( infd < 0 ) { set_retval( &retval, 1 ); continue; }
+      if( !check_tty_in( pp.name, infd, program_mode, &retval ) ) continue;
+      if( one_to_one )			/* open outfd after verifying infd */
         {
-        if( to_stdout ) outfd = STDOUT_FILENO;
-        else
-          {
-          if( program_mode == m_compress )
-            set_c_outname( input_filename, true, volume_size > 0 );
-          else set_d_outname( input_filename, eindex );
-          if( !open_outstream( force, false ) )
-            {
-            if( retval < 1 ) retval = 1;
-            close( infd );
-            continue;
-            }
-          }
+        if( program_mode == m_compress )
+          set_c_outname( input_filename, true, volume_size > 0 );
+        else set_d_outname( input_filename, eindex );
+        if( !open_outstream( force, true ) )
+          { close( infd ); set_retval( &retval, 1 ); continue; }
         }
       }
 
-    Pp_set_name( &pp, input_filename );
-    if( !check_tty( pp.name, infd, program_mode ) )
+    if( one_to_one && !check_tty_out( program_mode ) )
+      { set_retval( &retval, 1 ); return retval; }	/* don't delete a tty */
+
+    if( to_file && outfd < 0 )		/* open outfd after verifying infd */
       {
-      if( retval < 1 ) retval = 1;
-      if( program_mode == m_test ) { close( infd ); continue; }
-      cleanup_and_fail( retval );
+      if( program_mode == m_compress ) set_c_outname( default_output_filename,
+                                       false, volume_size > 0 );
+      else
+        { output_filename = resize_buffer( output_filename,
+                            strlen( default_output_filename ) + 1 );
+          strcpy( output_filename, default_output_filename ); }
+      if( !open_outstream( force, false ) || !check_tty_out( program_mode ) )
+        return 1;	/* check tty only once and don't try to delete a tty */
       }
 
-    in_statsp = input_filename[0] ? &in_stats : 0;
+    in_statsp = ( input_filename[0] && one_to_one ) ? &in_stats : 0;
     if( program_mode == m_compress )
       tmp = compress( member_size, volume_size, infd, &encoder_options, &pp,
                       in_statsp );
@@ -1129,29 +1192,24 @@ int main( const int argc, const char * const argv[] )
       tmp = decompress( infd, &pp, ignore_trailing,
                         loose_trailing, program_mode == m_test );
     if( close( infd ) != 0 )
-      {
-      show_error( input_filename[0] ? "Error closing input file" :
-                                      "Error closing stdin", errno, false );
-      if( tmp < 1 ) tmp = 1;
-      }
-    if( tmp > retval ) retval = tmp;
+      { show_file_error( pp.name, "Error closing input file", errno );
+        set_retval( &tmp, 1 ); }
+    set_retval( &retval, tmp );
     if( tmp )
       { if( program_mode != m_test ) cleanup_and_fail( retval );
         else ++failed_tests; }
 
-    if( delete_output_on_interrupt )
+    if( delete_output_on_interrupt && one_to_one )
       close_and_set_permissions( in_statsp );
-    if( input_filename[0] )
-      {
-      if( !keep_input_files && !to_stdout && program_mode != m_test &&
-          ( program_mode != m_compress || volume_size == 0 ) )
-        remove( input_filename );
-      }
+    if( input_filename[0] && !keep_input_files && one_to_one &&
+        ( program_mode != m_compress || volume_size == 0 ) )
+      remove( input_filename );
     }
-  if( outfd >= 0 && close( outfd ) != 0 )
+  if( delete_output_on_interrupt ) close_and_set_permissions( 0 );	/* -o */
+  else if( outfd >= 0 && close( outfd ) != 0 )				/* -c */
     {
     show_error( "Error closing stdout", errno, false );
-    if( retval < 1 ) retval = 1;
+    set_retval( &retval, 1 );
     }
   if( failed_tests > 0 && verbosity >= 1 && num_filenames > 1 )
     fprintf( stderr, "%s: warning: %d %s failed the test.\n",

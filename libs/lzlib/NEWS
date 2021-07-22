@@ -1,30 +1,92 @@
-Changes in version 1.11:
+Changes in version 1.12:
 
-In case of decompression error caused by corrupt or truncated data,
-LZ_decompress_read now does not signal the error immediately to the
-application, but waits until all decoded bytes have been read. This
-allows tools like tarlz to recover as much data as possible from damaged
-members.
+The value of the version test macro 'LZ_API_VERSION' is now defined as
+1000 * major + minor. For version 1.12 it is 1012.
+This change does not affect the soversion.
 
-It is now an error to specify two different operations to minilzip in
-the command line (--decompress and --test).
+The new function 'LZ_api_version', which returns the LZ_API_VERSION of the
+library object code being used, has been added to lzlib.
 
-Minilzip now also checks for errors when closing the input file.
+If end of file is found at member trailer or EOS marker,
+'LZ_decompress_errno' now returns 'LZ_unexpected_eof' instead of
+'LZ_data_error'.
 
-Minilzip now compiles on DOS with DJGPP. (Patch from Robert Riebisch).
+Decompression speed has been slightly increased.
 
-The descriptions of '-0..-9', '-m' and '-s' in the manual have been
-improved.
+A bug has been fixed in minilzip that falsely reported a library stall when
+decompressing a file with empty members.
 
-It has been documented that it is safe to call 'LZ_(de)compress_finish'
-as many times as needed. Examples in the manual have been simplified.
+The new option '--check-lib', which compares the version of lzlib used to
+compile minilzip with the version actually being used, has been added to
+minilzip.
 
-The configure script now accepts appending options to CFLAGS using the
-syntax 'CFLAGS+=OPTIONS'.
+Minilzip now reports an error if a file name is empty (minilzip -t "").
 
-Makefile targets 'install-bin*' have been renamed to 'install-lib*'. New
-'install-bin*' targets have been created that install a shared minilzip,
-or a static minilzip if the shared library has not been configured.
+Option '-o, --output' now behaves like '-c, --stdout', but sending the
+output unconditionally to a file instead of to standard output. See the new
+description of '-o' in the manual. This change is not backwards compatible.
+Therefore commands like:
+  minilzip -o foo.lz - bar < foo
+must now be split into:
+  minilzip -o foo.lz - < foo
+  minilzip bar
+or rewritten as:
+  minilzip - bar < foo > foo.lz
 
-It has been documented in INSTALL the use of
-CFLAGS+='-D __USE_MINGW_ANSI_STDIO' when compiling on MinGW.
+When using '-c' or '-o', minilzip now checks whether the output is a
+terminal only once.
+
+Minilzip now does not even open the output file if the input file is a terminal.
+
+The words 'decompressed' and 'compressed' have been replaced with the
+shorter 'out' and 'in' in the verbose output of minilzip when decompressing
+or testing.
+
+It has been documented in the manual that 'LZ_(de)compress_close' and
+'LZ_(de)compress_errno' can be called with a null argument.
+
+It has been documented in the manual that the LZMA marker '3' ("Sync Flush"
+marker) is not allowed in lzip files. Marker '3' is a device for interactive
+communication between applications using lzlib, but is useless and wasteful
+in a file, and is excluded from the media type 'application/lzip'. The LZMA
+marker '2' ("End Of Stream" marker) is the only marker allowed in lzip
+files.
+
+It has been documented in the manual that not calling 'LZ_decompress_finish'
+prevents lzlib from detecting a truncated member.
+
+It has been documented in the manual that 'LZ_decompress_read' returns at
+least once per member so that 'LZ_decompress_member_finished' can be called
+(and trailer data retrieved) for each member, even for empty members.
+Therefore, 'LZ_decompress_read' returning 0 does not mean that the end of
+the stream has been reached.
+
+It has been documented in the manual that 'LZ_(de)compress_read' can be
+called with a null buffer pointer argument.
+
+Real code examples for the most common uses of the library have been added
+to the tutorial.
+
+'bbexample.c' has been simplified to not use 'LZ_(de)compress_write_size'.
+
+'lzcheck' now accepts options '-s' (to check LZ_compress_sync_flush) and
+'-m' (to check member by member decompression).
+
+'lzcheck.c' now also tests member by member decompression without
+intermediate calls to 'LZ_decompress_finish'.
+
+The new file 'ffexample.c', containing example functions for file-to-file
+compression/decompression, has been added to the distribution.
+
+The commands needed to extract files from a tar.lz archive have been
+documented in the output of 'minilzip --help' and in the man page.
+
+'make install-bin' no longer installs the minilzip man page. This is to
+prevent 'make install-bin install-man-compress' from installing the man page
+twice before compressing it.
+
+The new targets 'install-bin-compress' and 'install-bin-strip-compress',
+which install a (stripped) minilzip and a compressed man page, have been
+added to the Makefile.
+
+9 new test files have been added to the testsuite.

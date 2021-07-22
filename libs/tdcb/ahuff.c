@@ -55,7 +55,7 @@ typedef struct tree {
  * pointer as an argument.
  */
 
-static TREE Tree;
+//static TREE Tree;
 
 /*
  * Function prototypes for both ANSI C compilers and their K&R brethren.
@@ -83,7 +83,7 @@ void ahuff_print_tree( TREE *tree, int first_row, int last_row );
 void ahuff_print_connecting_lines( TREE *tree, int row );
 void ahuff_print_node_numbers( int row );
 void ahuff_print_weights( TREE *tree, int row );
-void print_symbol( TREE *tree, int row );
+void ahuff_print_symbol( TREE *tree, int row );
 
 #else
 
@@ -106,7 +106,7 @@ void ahuff_print_tree();
 void ahuff_print_connecting_lines();
 void ahuff_print_node_numbers();
 void ahuff_print_weights();
-void print_symbol();
+void ahuff_print_symbol();
 
 #endif
 
@@ -167,6 +167,8 @@ char *argv[];
 {
 */
 QUICK_EXPAND(ahuff)
+    TREE Tree;
+
     int c;
 
     ahuff_InitializeTree( &Tree );
@@ -492,6 +494,7 @@ int c;
  * a linked list in the positions[] array.
  */
 
+#define rows    ahuff_rows
 struct row {
     int first_member;
     int count;
@@ -509,6 +512,7 @@ struct row {
  * columns for each column in the array.
  */
 
+#define positions   ahuff_positions
 struct location {
     int row;
     int next_member;
@@ -777,7 +781,7 @@ int last_row;
             ahuff_print_connecting_lines( tree, row );
         ahuff_print_node_numbers( row );
         ahuff_print_weights( tree, row );
-        print_symbol( tree, row );
+        ahuff_print_symbol( tree, row );
     }
 }
 
@@ -922,7 +926,7 @@ int row;
  * row at all.
  */
 
-void print_symbol( tree, row )
+void ahuff_print_symbol( tree, row )
 TREE *tree;
 int row;
 {

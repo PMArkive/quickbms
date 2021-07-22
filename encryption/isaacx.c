@@ -14,9 +14,6 @@ You may use this code in any way you wish, and it is free.  No warrantee.
 
 
 
-// use do_encrypt -1 for vernam
-void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datasz, int do_encrypt) {
-
     /* external results */
     static uint32_t randrsl[256], randcnt;
      
@@ -24,7 +21,7 @@ void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datas
     static    uint32_t mm[256];
     static    uint32_t aa=0, bb=0, cc=0;
 
-    void isaac()
+    static void isaac()
     {
        uint32_t i,x,y;
      
@@ -62,7 +59,7 @@ void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datas
        h^=a>>9;  c+=h; a+=b; \
     }
      
-    void randinit(int flag)
+    static void randinit(int flag)
     {
        int i;
        uint32_t a,b,c,d,e,f,g,h;
@@ -104,7 +101,7 @@ void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datas
      
      
     // Get a random 32-bit value 0..MAXINT
-    uint32_t iRandom()
+    static uint32_t iRandom()
     {
         uint32_t r = randrsl[randcnt];
         ++randcnt;
@@ -117,14 +114,14 @@ void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datas
      
      
     // Get a random character in printable ASCII range
-    char iRandA(char modulo, char start)
+    static char iRandA(char modulo, char start)
     {	
         return iRandom() % modulo + start;
     }
      
      
     // Seed ISAAC with a string
-    void iSeed(char *seed, int m, int flag)
+    static void iSeed(char *seed, int m, int flag)
     {
         uint32_t i;
         for (i=0; i<256; i++) mm[i]=0;
@@ -147,7 +144,7 @@ void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datas
      
      
     // XOR cipher on random stream. Output: ASCII string
-    void Vernam(char *msg, int l, char modulo, char start)
+    static void Vernam(char *msg, int l, char modulo, char start)
         {
             uint32_t i;
             // XOR message
@@ -156,7 +153,7 @@ void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datas
         }
      
     // Caesar-shift a printable character
-    char Caesar(enum ciphermode m, char ch, char shift, char modulo, char start)
+    static char Caesar(enum ciphermode m, char ch, char shift, char modulo, char start)
         {
             int n;
             if (m == mDecipher) shift = -shift;
@@ -167,16 +164,17 @@ void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datas
         }
      
     // Caesar-shift a string on a pseudo-random stream
-    void CaesarStr(enum ciphermode m, char *msg, int l, char modulo, char start)
+    static void CaesarStr(enum ciphermode m, char *msg, int l, char modulo, char start)
         {
             int i;
             // Caesar-shift message
             for (i=0; i<l; i++) 
                 msg[i] = Caesar(m, msg[i], iRandA(modulo,start), modulo, start);
         }
- 
 
 
+// use do_encrypt -1 for vernam
+void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datasz, int do_encrypt) {
     // LA: the code was terrible and I'm lazy so let's make one non-threadsafe
     //     function that can be used indipendently to set key or encrypt or
     //     doing both

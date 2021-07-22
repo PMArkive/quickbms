@@ -64,6 +64,7 @@ void arith_remove_symbol_from_stream();
 #endif
 
 #define END_OF_STREAM 256
+#define totals  arith_totals
 short int totals[ 258 ];            /* The cumulative totals                */
 
 //char *CompressionName = "Fixed order 0 model with arithmetic coding";
@@ -389,9 +390,13 @@ memory_file *input;
  * by declaring them as short ints, they will actually be 16 bits
  * on most 80X86 and 680X0 machines, as well as VAXen.
  */
+#define code    arith_code
 static unsigned short int code;  /* The present input code value       */
+#define low     arith_low
 static unsigned short int low;   /* Start of the current code range    */
+#define high    arith_high
 static unsigned short int high;  /* End of the current code range      */
+#define underflow_bits  arith_underflow_bits
 long underflow_bits;             /* Number of underflow bits pending   */
 
 /*

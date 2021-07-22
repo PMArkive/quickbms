@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2019 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -45,7 +45,7 @@
 #include <inttypes.h>
 #include <locale.h>
 #include <fcntl.h>
-#include "stristr.c"
+char *stristr(const char *String, const char *Pattern);
 
 #include "extra/xalloc.h"
 #include "extra/uthash_real_alloc.h"
@@ -115,6 +115,10 @@ typedef unsigned short  word;   // for sflcomp
     //#define stristr     strcasestr
     typedef uint16_t    WORD;
     typedef uint32_t    DWORD;
+    typedef void        VOID;
+    typedef size_t      SIZE_T;
+    typedef uint32_t    HRESULT;
+    #define S_OK        0
 #endif
 #ifndef nullptr
 #define nullptr NULL
@@ -134,6 +138,8 @@ i32 mystrnicmp(const char *a, const char *b, i32 n);
 #define strncmp     mystrncmp
 #undef strnicmp
 #define strnicmp    mystrnicmp
+#undef memicmp  // in case it's not implemented
+#define memicmp     mymemicmp
 
 // yeah it's cdecl by default
 int /*__cdecl*/ fake_printf(const char *__format, ...) {
@@ -289,7 +295,7 @@ extern void des(unsigned char *, unsigned char *);
     void   __crt0_load_environment_file (char *progname) { }
 #endif
 
-#define DISABLE_BACKTRACE   // it makes the executable bigger and breaks compatibility with Win98 (_fstat64)
+#define DISABLE_BACKTRACE   // it makes the executable bigger and breaks compatibility with Win98 (_fstat64). Needs -lbfd -liberty
 
 #ifdef WIN32
     #include <windows.h>
@@ -297,6 +303,7 @@ extern void des(unsigned char *, unsigned char *);
     //#include <shlobj.h>
     //#include <tlhelp32.h>
     #include <wincrypt.h>
+    #include <wchar.h>  // for unicode command-line (moved here or gives problems)
     #include <direct.h>
     //#include <ddk/ntifs.h>    // I want compatibility even with Win9x
     #include "extra/MemoryModule.h"
@@ -335,6 +342,7 @@ extern void des(unsigned char *, unsigned char *);
         // don't use iconv
     #else
         #define USE_LIBICONV    // -liconv
+        #include <iconv.h>
     #endif
     #define __declspec(X)
 #endif
@@ -362,11 +370,20 @@ extern void des(unsigned char *, unsigned char *);
     #endif
 #endif
 
-# ifndef __cdecl 
+# ifndef __cdecl
+#if defined(IA64)
+#  define __cdecl
+#else
 #  define __cdecl  __attribute__ ((__cdecl__))
+#endif
 # endif
+
 # ifndef __stdcall
+#if defined(IA64)
+#  define __stdcall __attribute__ ((ms_abi))    // ???
+#else
 #  define __stdcall __attribute__ ((__stdcall__))
+#endif
 # endif
 void __cxa_pure_virtual() { while(1); }
 
@@ -380,7 +397,7 @@ static u8   VER[64]     = "";       // kept for compatibility with some function
 #define MAX_ARGS        32          // fixed but exagerated
 #define MAX_VARS        1024        // fixed but exagerated (name/value_static gives problems with allocated variables)
 #define MAX_FILES       1024        // fixed but exagerated, currently the handling of MAX_FILES is uncertain... >= MAX_FILES or > MAX_FILES? both are "correct"
-#define MAX_CMDS        4096        // fixed but exagerated
+#define MAX_CMDS        8192        // fixed but exagerated
 #define MAX_ARRAYS      1024        // fixed but exagerated
 
 #define STRINGSZ        273         // more than MAX_PATH, aligned with +1, 273*15+1 = 4096
@@ -414,11 +431,12 @@ ERROR VAR_NAMESZ < NUMBERSZ
 #define VAR(X)          get_var(CMD.var[X])
 #define VAR32(X)        get_var32(CMD.var[X])
 #define VARPTR(X)       (CMD.num[X] ? get_var_ptr(CMD.var[X]) : NULL)
-#ifdef QUICKBMS_VAR_STATIC
-#define VARSZ(X)        VARVAR(X).size   // due to the memory enhancement done on this tool, VARSZ returns ever STRINGSZ for sizes lower than this value... so do NOT trust this value!
+#ifdef QUICKBMS_VAR_STATIC  // due to the memory enhancement done on this tool, VARSZ returns ever STRINGSZ for sizes lower than this value... so do NOT trust this value!
+#define VARSZ(X)        (g_force_cstring ? get_var_fullsz(CMD.var[X]) : VARVAR(X).size)
 #else
 #define VARSZ(X)        get_var_fullsz(CMD.var[X])    // causes LOT of problems with static variables, check what happened with quickbms 0.7.2a
 #endif
+#define VARSZF(X)       get_var_fullsz(CMD.var[X])
 //#define FILEZ(X)        ((NUM(X) < 0) ? NULL : g_filenumber[NUM(X)].fd)  // automatic support for MEMORY_FILE
 #define FILEZ(X)        _FILEZ(NUM(X))
 #define MEMORY_FNAME    "MEMORY_FILE"
@@ -465,14 +483,18 @@ static void FCLOSEX(FILE *X) { if(X && (X != stdout) && (X != stderr) && (X != s
 #define myatoi(X)       readbase(X, 10, NULL)
 #define CSTRING(X,Y)    { \
                         mystrdup(&CMD.str[X], Y); \
-                        CMD.num[X] = cstring(CMD.str[X], CMD.str[X], -1, NULL); \
+                        CMD.num[X] = cstring(CMD.str[X], CMD.str[X], -1, NULL, &CMD.mask); \
                         }
-#define QUICK_GETi32(X,Y)   (((X)[(Y)])   | ((X)[(Y)+1] << 8) | ((X)[(Y)+2] << 16) | ((X)[(Y)+3] << 24))
-#define QUICK_GETb32(X,Y)   (((X)[(Y)+3]) | ((X)[(Y)+2] << 8) | ((X)[(Y)+1] << 16) | ((X)[(Y)]   << 24))
-#define QUICK_GETi16(X,Y)   (((X)[(Y)])   | ((X)[(Y)+1] << 8))
-#define QUICK_GETb16(X,Y)   (((X)[(Y)+1]) | ((X)[(Y)]   << 8))
+#define _QUICK_GETi32(X,Y)  (((X)[(Y)])   | ((X)[(Y)+1] << 8) | ((X)[(Y)+2] << 16) | ((X)[(Y)+3] << 24))
+#define _QUICK_GETb32(X,Y)  (((X)[(Y)+3]) | ((X)[(Y)+2] << 8) | ((X)[(Y)+1] << 16) | ((X)[(Y)]   << 24))
+#define _QUICK_GETi16(X,Y)  (((X)[(Y)])   | ((X)[(Y)+1] << 8))
+#define _QUICK_GETb16(X,Y)  (((X)[(Y)+1]) | ((X)[(Y)]   << 8))
 #define QUICK_PUTi32(X,Y)   (X)[0]=(Y);      (X)[1]= (Y)>> 8;    (X)[2]= (Y)>>16;     (X)[3]= (Y)>> 24;
 #define QUICK_PUTb32(X,Y)   (X)[3]=(Y);      (X)[2]= (Y)>> 8;    (X)[1]= (Y)>>16;     (X)[0]= (Y)>> 24;
+#define QUICK_GETi32(X)     _QUICK_GETi32(X,0)
+#define QUICK_GETb32(X)     _QUICK_GETb32(X,0)
+#define QUICK_GETi16(X)     _QUICK_GETi16(X,0)
+#define QUICK_GETb16(X)     _QUICK_GETb16(X,0)
 #define SCAN_INPUT_FILE_PATH(OUT_BUFF, IN_NAME) \
             switch(path_idx) { \
                 case 0:  mypath = g_bms_folder;     break; \
@@ -506,7 +528,6 @@ char *(*real_strdup)(const char *) = strdup;
 #define strdup          strdup_dontuse
 #define far
 //#define PRINTF64(X)     (i32)(((X) >> 32) & 0xffffffff), (i32)((X) & 0xffffffff)
-#define QUICKBMS_CACHED_IO_SIZE (512 * 1024)    // this is probably the best size for optimal speed
 #define QUICKBMS_MIN_INT(X)     (((u_int)1 << (u_int)((sizeof(X) * 8) - 1)))
 #define QUICKBMS_MAX_INT(X)     (((u_int)1 << (u_int)((sizeof(X) * 8) - 1)) - 1)
 #define QUICKBMS_MAX_UINT(X)    (((u_int)1 << (u_int)((sizeof(X) * 8)    )) - 1)
@@ -581,6 +602,7 @@ void myexit(int ret);
 #include "io/audio.c"
 #include "io/video.c"
 #include "io/winmsg.c"
+#include "extra/quickrva.h"
 #undef myalloc
 #define MAINPROG
 #include "disasm/disasm.h"
@@ -664,7 +686,7 @@ int set_console_title(u8 *options_db, u8 *bms, u8 *fname) {
         get_filename(fname)
     );
 
-    if((len < 0) || (len > sizeof(title))) {
+    if((len < 0) || (len >= sizeof(title))) {
         title[sizeof(title) - 1] = 0;
     }
 #ifdef WIN32
@@ -866,7 +888,15 @@ LONG WINAPI UnhandledException(EXCEPTION_POINTERS *ExceptionInfo) {
 
 
 
-i32 main(i32 argc, char *argv[]) {
+void quickbms_args_error(i32 argc, char *argv[], i32 idx) {
+    fprintf(stderr, "\nError: wrong command-line argument (%s)\n\n", argv[idx]);
+    dump_cmdline(argc, argv);
+    myexit(QUICKBMS_ERROR_ARGUMENTS);
+}
+
+
+
+i32 quickbms_main(i32 argc, char *argv[]) {
     static u8   filedir[PATHSZ + 1] = ".",  // don't waste the stack
                 bckdir[PATHSZ + 1]  = ".";
     files_t *files              = NULL;
@@ -884,8 +914,8 @@ i32 main(i32 argc, char *argv[]) {
             fname_multi_select  = 0,
             embed_mode          = 0,
             post_script_size    = 0;
-    u8      options_db[256]     = "",
-            *newdir             = NULL,
+    static u8   options_db[256] = "";
+    u8      *newdir             = NULL,
             *bms                = NULL,
             *fname              = NULL,
             *fdir               = ".",
@@ -915,6 +945,7 @@ i32 main(i32 argc, char *argv[]) {
             case 'W': i++;  break;
             case 't': i++;  break;
             case 'b': i++;  break;
+            case 'y': i++;  break;
 
             //
             case 'G': g_is_gui = !g_is_gui; break;
@@ -1115,8 +1146,7 @@ i32 main(i32 argc, char *argv[]) {
     for(i = 1; i < argc; i++) {
         if(verbose_options(argv[i]) < 0) {
             if((i + 3) >= argc) break;
-            fprintf(stderr, "\nError: wrong command-line argument (%s)\n", argv[i]);
-            myexit(QUICKBMS_ERROR_ARGUMENTS);
+            quickbms_args_error(argc, argv, i);
         }
         options_db[(u8)argv[i][1]]++;
         switch(argv[i][1]) {
@@ -1206,17 +1236,17 @@ i32 main(i32 argc, char *argv[]) {
                 i++;
                 g_log_filler_char   = (strlen(argv[i]) == 1) ? argv[i][0] : myatoi(argv[i]);
                 break;
+            case 'y': g_debug_output            = init_debug_output(argv[++i]); break;
             // remember to add the options with arguments to the above list
             default: {
-                fprintf(stderr, "\nError: wrong command-line argument (%s)\n", argv[i]);
-                myexit(QUICKBMS_ERROR_ARGUMENTS);
+                quickbms_args_error(argc, argv, i);
             }
         }
     }
 
     if(update) quickbms_update();
 
-    if(g_ipc_web_api > 0) {
+    if(g_ipc_web_api) { // before it was "> 0" but I want to allow people to disable the web API if port is negative
         g_quick_gui_exit          = 1;
         g_void_dump               = 1;
         enable_calldll            = 1;
@@ -1299,21 +1329,7 @@ i32 main(i32 argc, char *argv[]) {
     build_filter(&g_filter_in_files, filter_in_files_tmp);
     FREE(filter_in_files_tmp)
 
-    g_temp_folder[0] = 0;
-#ifdef WIN32
-    GetTempPath(sizeof(g_temp_folder), g_temp_folder);
-#endif
-    if(!g_temp_folder[0]) {
-        p = getenv ("TMP");
-        if(!p) p = getenv ("TEMP");
-        if(!p) p = getenv ("TMPDIR");
-#ifdef WIN32
-        if(!p) p = "c:\\windows\\temp";
-#else
-        if(!p) p = "/tmp";
-#endif
-        mystrcpy(g_temp_folder, p, PATHSZ);
-    }
+    get_temp_path(g_temp_folder, sizeof(g_temp_folder));
 
     if(!xgetcwd(g_current_folder, PATHSZ)) STD_ERR(QUICKBMS_ERROR_FOLDER);
 
@@ -1366,7 +1382,10 @@ i32 main(i32 argc, char *argv[]) {
     if(strchr(bms, ':') || (bms[0] == '/') || (bms[0] == '\\')) {   // almost absolute path
         g_bms_folder[0] = 0;
     } else {
-        mystrcpy(g_bms_folder, g_current_folder, PATHSZ);
+        len = snprintf(g_bms_folder, PATHSZ + 1, "%s%c", g_current_folder, PATHSLASH);
+        if((len < 0) || (len >= (PATHSZ + 1))) {
+            g_bms_folder[PATHSZ] = 0;
+        }
     }
     mystrcpy(g_bms_folder + strlen(g_bms_folder), bms, PATHSZ - strlen(g_bms_folder));
     mystrcpy(g_bms_script, g_bms_folder, PATHSZ);
@@ -1435,6 +1454,7 @@ i32 main(i32 argc, char *argv[]) {
         fprintf(stderr, "- output_folder:  %s\n", g_output_folder);
         fprintf(stderr, "- temp_folder:    %s\n", g_temp_folder);
 
+        // these variables are here for security reason since this code can only be reached via command-line
         add_var(0, "quickbms_current_folder",     g_current_folder, 0, -1);
         add_var(0, "quickbms_bms_folder",         g_bms_folder,     0, -1);
         add_var(0, "quickbms_exe_folder",         g_exe_folder,     0, -1);
@@ -1451,7 +1471,11 @@ i32 main(i32 argc, char *argv[]) {
 
     if(check_extension(bms, "wcx")) wcx_plugin = 1;
 
+    int g_reimport_backup = g_reimport;
 redo:
+    g_reimport = g_reimport_backup;
+    quickbms_set_reimport_var();
+
     benchmark = time(NULL);
     if(files) {
         fname = files[curr_file].name;
@@ -1504,6 +1528,10 @@ redo:
                 cmd = parse_bms(pre_fd, NULL, cmd, 0);
                 FCLOSE(pre_fd);
             } else {
+                p = mystrchrs(pre_script, " \t\r\n");
+                if(!p) {    // the input script is compressed
+                    pre_script = type_decompress(pre_script, NULL);
+                }
                 cmd = parse_bms(NULL, pre_script, cmd, 1);
             }
         }
@@ -1611,6 +1639,28 @@ redo:
 
 
 #ifdef WIN32
+
+extern i32 _CRT_glob;
+extern i32 __wgetmainargs(i32*,wchar_t***,wchar_t***,i32,i32*);
+
+i32 main(i32 argc, char *argv[]) {
+	wchar_t **wenpv = NULL, **wargv = NULL;
+	i32     wargc = 0, si = 0;
+	if(!__wgetmainargs(&wargc, &wargv, &wenpv, _CRT_glob, &si)) {
+
+        i32     i;
+        char    *myargv[wargc + 1];
+        for(i = 0; i < wargc; i++) {
+            myargv[i] = mystrdup_simple(native_unicode_to_utf8(wargv[i]));
+        }
+        myargv[i] = NULL;
+
+        return quickbms_main(wargc, myargv);
+
+    }
+    return quickbms_main(argc, argv);
+}
+
 BOOL WINAPI DllMain(
     HINSTANCE hinstDLL,
     DWORD     fdwReason,
@@ -1619,6 +1669,13 @@ BOOL WINAPI DllMain(
     quickbms_dll_init();
     return TRUE;
 }
+
+#else
+
+i32 main(i32 argc, char *argv[]) {
+    return quickbms_main(argc, argv);
+}
+
 #endif
 // void _init(void) is already declared on *nix
 

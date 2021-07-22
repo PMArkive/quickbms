@@ -12,8 +12,8 @@
 # http://www.amiga-stuff.com/crunchers-download.html
 # http://aminet.net/package/util/libs/ulib4271
 
-
-
+# for Mingw64
+.code32
 
 #########################################################################
 #                                                                       #

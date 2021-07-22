@@ -1,6 +1,5 @@
-// modified by Luigi Auriemma
 // File: platform.cpp
-// See Copyright Notice and license at the end of include/lzham.h
+// LZHAM is in the Public Domain. Please see the Public Domain declaration at the end of include/lzham.h
 #include "lzham_core.h"
 #include "lzham_timer.h"
 #include <assert.h>
@@ -62,8 +61,8 @@ void lzham_debug_break(void)
 {
 #if LZHAM_USE_WIN32_API
    DebugBreak();
-//#elif (TARGET_OS_MAC == 1) && (TARGET_IPHONE_SIMULATOR == 0) && (TARGET_OS_IPHONE == 0)
-//   __asm {int 3}
+#elif (TARGET_OS_MAC == 1) && (TARGET_IPHONE_SIMULATOR == 0) && (TARGET_OS_IPHONE == 0)
+   //__asm {int 3}
 #else
    assert(0);
 #endif

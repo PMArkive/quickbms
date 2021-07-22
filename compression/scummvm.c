@@ -289,26 +289,26 @@ uint32 decompressSPCN(byte *src, byte *dst, uint32 dstsize) {
 #define WRITE_LE_INT16(x, y)  WRITE_LE_UINT16(x, (int16)y)
 #define WRITE_LE_INT32(x, y)  WRITE_LE_UINT32(x, (int32)y)
 
-	uint16 RncDecoder__rawTable[64];
-	uint16 RncDecoder__posTable[64];
-	uint16 RncDecoder__lenTable[64];
-	uint16 RncDecoder__crcTable[256];
+	static uint16 RncDecoder__rawTable[64];
+	static uint16 RncDecoder__posTable[64];
+	static uint16 RncDecoder__lenTable[64];
+	static uint16 RncDecoder__crcTable[256];
 
-	uint16 RncDecoder__bitBuffl;
-	uint16 RncDecoder__bitBuffh;
-	uint8 RncDecoder__bitCount;
+	static uint16 RncDecoder__bitBuffl;
+	static uint16 RncDecoder__bitBuffh;
+	static uint8 RncDecoder__bitCount;
 
-	const uint8 *RncDecoder__srcPtr;
-	uint8 *RncDecoder__dstPtr;
+	static const uint8 *RncDecoder__srcPtr;
+	static uint8 *RncDecoder__dstPtr;
 
-	int16 RncDecoder__inputByteLeft;
+	static int16 RncDecoder__inputByteLeft;
 
 //#define RncDecoder_TABLE_SIZE  (16 * 8)
 #define RncDecoder_MIN_LENGTH  2
 
 //RncDecoder__~RncDecoder() { }
 
-void RncDecoder__initCrc() {
+static void RncDecoder__initCrc() {
 	//debugC(1, kDebugTools, "initCrc()");
 
 	uint16 cnt = 0;
@@ -328,7 +328,7 @@ void RncDecoder__initCrc() {
 	}
 }
 
-void RncDecoder__RncDecoder() {
+static void RncDecoder__RncDecoder() {
 	RncDecoder__initCrc();
 
 	RncDecoder__bitBuffl = 0;
@@ -340,7 +340,7 @@ void RncDecoder__RncDecoder() {
 }
 
 //calculate 16 bit crc of a block of memory
-uint16 RncDecoder__crcBlock(const uint8 *block, uint32 size) {
+static uint16 RncDecoder__crcBlock(const uint8 *block, uint32 size) {
 	//debugC(1, kDebugTools, "crcBlock(block, %d)", size);
 
 	uint16 crc = 0;
@@ -360,7 +360,7 @@ uint16 RncDecoder__crcBlock(const uint8 *block, uint32 size) {
 	return crc;
 }
 
-uint16 RncDecoder__inputBits(uint8 amount) {
+static uint16 RncDecoder__inputBits(uint8 amount) {
 	//debugC(5, kDebugTools, "inputBits(%d)", amount);
 
 	uint16 newBitBuffh = RncDecoder__bitBuffh;
@@ -399,7 +399,7 @@ uint16 RncDecoder__inputBits(uint8 amount) {
 	return returnVal;
 }
 
-void RncDecoder__makeHufftable(uint16 *table) {
+static void RncDecoder__makeHufftable(uint16 *table) {
 	//debugC(1, kDebugTools, "makeHufftable(table)");
 
 	uint16 bitLength, i, j;
@@ -433,7 +433,7 @@ void RncDecoder__makeHufftable(uint16 *table) {
 	}
 }
 
-uint16 RncDecoder__inputValue(uint16 *table) {
+static uint16 RncDecoder__inputValue(uint16 *table) {
 	//debugC(5, kDebugTools, "inputValue(table)");
 
 	uint16 valOne, valTwo, value = RncDecoder__bitBuffl;
@@ -457,7 +457,7 @@ uint16 RncDecoder__inputValue(uint16 *table) {
 	return value;
 }
 
-int RncDecoder__getbit() {
+static int RncDecoder__getbit() {
 	//debugC(6, kDebugTools, "getbits()");
 
 	if (RncDecoder__bitCount == 0) {
@@ -733,15 +733,12 @@ int32 RncDecoder__unpackM2(const void *input, uint32 packLen, void *output, uint
 
 
 
-
-
-
 /*****************/
 
 
 
 int CineUnpacker__unpack(const byte *src, uint srcLen, byte *dst, uint dstLen) {
-
+#if defined(__GNUC__) && !defined(__clang__)
 	uint32 _crc;      ///< Error-detecting code (This should be zero after successful unpacking)
 	uint32 _chunk32b; ///< The current internal 32-bit chunk of source data
 	byte *_dst;       ///< Pointer to the current position in the destination buffer
@@ -877,6 +874,9 @@ void CineUnpacker__copyRelocatedBytes(uint offset, uint numBytes) {
 	//return !_error && (_crc == 0);
     if(!_error) return unpackedLength;
     return -1;
+#else
+    return -1;
+#endif
 }
 
 
@@ -886,7 +886,7 @@ void CineUnpacker__copyRelocatedBytes(uint offset, uint numBytes) {
 
 
 int delphineUnpack(byte *dst, int datasize, byte *src, int len) {
-
+#if defined(__GNUC__) && !defined(__clang__)
 typedef struct {
 	int size, datasize;
 	uint32 crc;
@@ -981,6 +981,9 @@ void delphine__unpackHelper2(UnpackCtx *uc, byte numChunks) {
 	} while (uc.datasize > 0);
 	//return uc.crc == 0;
     return datasize;
+#else
+    return -1;
+#endif
 }
 
 
@@ -1065,20 +1068,20 @@ enum ResourceErrorCodes {
 
 //typedef unsigned char   byte;
 
-	uint32 _dwBits;		///< bits buffer
-	byte _nBits;		///< number of unread bits in _dwBits
-	uint32 _szPacked;	///< size of the compressed data
-	uint32 _szUnpacked;	///< size of the decompressed data
-	uint32 _dwRead;		///< number of bytes read from _src
-	uint32 _dwWrote;	///< number of bytes written to _dest
-	byte *_src;
-	byte *_dest;
+	static uint32 _dwBits;		///< bits buffer
+	static byte _nBits;		///< number of unread bits in _dwBits
+	static uint32 _szPacked;	///< size of the compressed data
+	static uint32 _szUnpacked;	///< size of the decompressed data
+	static uint32 _dwRead;		///< number of bytes read from _src
+	static uint32 _dwWrote;	///< number of bytes written to _dest
+	static byte *_src;
+	static byte *_dest;
 
-	byte *_nodes;
+	static byte *_nodes;
 
-	uint16 _numbits;
-	uint16 _curtoken, _endtoken;
-	int _compression;
+	static uint16 _numbits;
+	static uint16 _curtoken, _endtoken;
+	static int _compression;
 
 enum ResourceCompression {
 	kCompUnknown = -1,
@@ -1096,11 +1099,11 @@ enum ResourceCompression {
 
 
 
-	bool Decompressor__isFinished() {
+	static bool Decompressor__isFinished() {
 		return (_dwWrote == _szUnpacked) && (_dwRead >= _szPacked);
 	}
 
-void Decompressor__init(byte *src, byte *dest, uint32 nPacked,
+static void Decompressor__init(byte *src, byte *dest, uint32 nPacked,
                         uint32 nUnpacked) {
 	_src = src;
 	_dest = dest;
@@ -1111,7 +1114,7 @@ void Decompressor__init(byte *src, byte *dest, uint32 nPacked,
 	_dwBits = 0;
 }
 
-void Decompressor__fetchBitsMSB() {
+static void Decompressor__fetchBitsMSB() {
 	while (_nBits <= 24) {
 		_dwBits |= ((uint32)*_src++) << (24 - _nBits);
 		_nBits += 8;
@@ -1119,7 +1122,7 @@ void Decompressor__fetchBitsMSB() {
 	}
 }
 
-uint32 Decompressor__getBitsMSB(int n) {
+static uint32 Decompressor__getBitsMSB(int n) {
 	// fetching more data to buffer if needed
 	if (_nBits < n)
 		Decompressor__fetchBitsMSB();
@@ -1129,11 +1132,11 @@ uint32 Decompressor__getBitsMSB(int n) {
 	return ret;
 }
 
-byte Decompressor__getByteMSB() {
+static byte Decompressor__getByteMSB() {
 	return Decompressor__getBitsMSB(8);
 }
 
-void Decompressor__fetchBitsLSB() {
+static void Decompressor__fetchBitsLSB() {
 	while (_nBits <= 24) {
 		_dwBits |= ((uint32)*_src++) << _nBits;
 		_nBits += 8;
@@ -1141,7 +1144,7 @@ void Decompressor__fetchBitsLSB() {
 	}
 }
 
-uint32 Decompressor__getBitsLSB(int n) {
+static uint32 Decompressor__getBitsLSB(int n) {
 	// fetching more data to buffer if needed
 	if (_nBits < n)
 		Decompressor__fetchBitsLSB();
@@ -1151,18 +1154,18 @@ uint32 Decompressor__getBitsLSB(int n) {
 	return ret;
 }
 
-byte Decompressor__getByteLSB() {
+static byte Decompressor__getByteLSB() {
 	return Decompressor__getBitsLSB(8);
 }
 
-void Decompressor__putByte(byte b) {
+static void Decompressor__putByte(byte b) {
 	_dest[_dwWrote++] = b;
 }
 //-------------------------------
 //  Huffman decompressor
 //-------------------------------
 
-int16 DecompressorHuffman__getc2() {
+static int16 DecompressorHuffman__getc2() {
 	byte *node = _nodes;
 	int16 next;
 	while (node[1]) {
@@ -1200,7 +1203,7 @@ int DecompressorHuffman__unpack(byte *src, byte *dest, uint32 nPacked,
 //-------------------------------
 // LZW Decompressor for SCI0/01/1
 //-------------------------------
-void DecompressorLZW__init(byte *src, byte *dest, uint32 nPacked, uint32 nUnpacked) {
+static void DecompressorLZW__init(byte *src, byte *dest, uint32 nPacked, uint32 nUnpacked) {
 	Decompressor__init(src, dest, nPacked, nUnpacked);
 
 	_numbits = 9;
@@ -1410,7 +1413,7 @@ int DecompressorLZW__unpackLZW1(byte *src, byte *dest, uint32 nPacked,
 #define EXTRA_MAGIC_SIZE 15
 #define VIEW_HEADER_COLORS_8BIT 0x80
 
-int DecompressorLZW__decodeRLE(byte **rledata, byte **pixeldata, byte *outbuffer, int size) {
+static int DecompressorLZW__decodeRLE(byte **rledata, byte **pixeldata, byte *outbuffer, int size) {
 	int pos = 0;
 	byte nextbyte;
 	byte *rd = *rledata;
@@ -1448,7 +1451,7 @@ int DecompressorLZW__decodeRLE(byte **rledata, byte **pixeldata, byte *outbuffer
  * Does the same this as decodeRLE, only to determine the length of the
  * compressed source data.
  */
-int DecompressorLZW__getRLEsize(byte *rledata, int dsize) {
+static int DecompressorLZW__getRLEsize(byte *rledata, int dsize) {
 	int pos = 0;
 	byte nextbyte;
 	int size = 0;
@@ -1547,7 +1550,7 @@ int DecompressorLZW__reorderPic(byte *src, byte *dest, int dsize) {
     return writer - dest;
 }
 
-void DecompressorLZW__buildCelHeaders(byte **seeker, byte **writer, int celindex, int *cc_lengths, int max) {
+static void DecompressorLZW__buildCelHeaders(byte **seeker, byte **writer, int celindex, int *cc_lengths, int max) {
     int c;
 	for (c = 0; c < max; c++) {
 		memcpy(*writer, *seeker, 6);
@@ -1710,8 +1713,8 @@ int DecompressorDCL__unpack(byte *src, byte *dest, uint32 nPacked,
 // Based on Andre Beck's code from http://micky.ibh.de/~beck/stuff/lzs4i4l/
 //----------------------------------------------
 
-int DecompressorLZS__unpackLZS() {
-
+static int DecompressorLZS__unpackLZS() {
+#if defined(__GNUC__) && !defined(__clang__)
 uint32 Decompressor__getCompLen() {
 	uint32 clen;
 	int nibble;
@@ -1778,6 +1781,9 @@ void Decompressor__copyComp(int offs, uint32 clen) {
 	} // end of while ()
 	//return _dwWrote == _szUnpacked ? 0 : SCI_ERROR_DECOMPRESSION_ERROR;
     return _dwWrote;
+#else
+    return -1;
+#endif
 }
 
 int DecompressorLZS__unpack(byte *src, byte *dest, uint32 nPacked, uint32 nUnpacked) {
@@ -1916,7 +1922,7 @@ uint16 PS2Icon__decompressData(byte *in, int insz, byte *out, int outsz) {
  */
 int LZWDecoder__lzwExpand(uint8 *in, uint8 *out, int32 len) {
 
-
+#if defined(__GNUC__) && !defined(__clang__)
 	enum {
 		MAXBITS		= 12,
 		TABLE_SIZE	= 18041,	// strange number
@@ -2051,6 +2057,9 @@ uint32 LZWDecoder__inputCode(uint8 **input) {
     LZWDecoder__xLZWDecoder();
 
     return out - bck;
+#else
+    return -1;
+#endif
 }
 
 
@@ -2251,7 +2260,7 @@ uint32 Screen__decompressHIF_other(byte *src, byte *dst/*, uint32 *skipData*/) {
 
 
 int FileExpander__process(uint8 *dst, uint8 *src, uint32 outsize, uint32 compressedSize) {
-
+#if defined(__GNUC__) && !defined(__clang__)
 	const uint8 *_dataPtr;
 	const uint8 *_endofBuffer;
 	uint16 _key;
@@ -2652,6 +2661,9 @@ uint8 FileExpander__calcCmdAndIndex(const uint8 *tbl, int16 *ret_para) {
     FileExpander__xFileExpander();
 	//return true;
     return d - dst;
+#else
+    return -1;
+#endif
 }
 
 
@@ -2683,11 +2695,14 @@ int SoundTownsPC98_v2__voicePlay(byte *src, byte *dst, int outsize) {
 
 
 
+#define scummvm_CLIP(v, amin, amax) \
+    ((v < amin) ? amin : ((v > amax) ? amax : v))
+
 int VQAMovie__decodeSND1(byte *inbuf, uint32 insize, byte *outbuf, uint32 outsize) {
     byte *bck = outbuf;
 
-inline int16 CLIP(int16 v, int16 amin, int16 amax)
-		{ if (v < amin) return amin; else if (v > amax) return amax; else return v; }
+//inline int16 CLIP(int16 v, int16 amin, int16 amax)
+//		{ if (v < amin) return amin; else if (v > amax) return amax; else return v; }
 
 	const int8 WSTable2Bit[] = { -2, -1, 0, 1 };
 	const int8 WSTable4Bit[] = {
@@ -2727,11 +2742,11 @@ inline int16 CLIP(int16 v, int16 amin, int16 amax)
 				code = *inbuf++;
 
 				curSample += WSTable4Bit[code & 0x0F];
-				curSample = CLIP(curSample, 0, 255);
+				curSample = scummvm_CLIP(curSample, 0, 255);
 				*outbuf++ = curSample;
 
 				curSample += WSTable4Bit[code >> 4];
-				curSample = CLIP(curSample, 0, 255);
+				curSample = scummvm_CLIP(curSample, 0, 255);
 				*outbuf++ = curSample;
 
 				outsize -= 2;
@@ -2742,19 +2757,19 @@ inline int16 CLIP(int16 v, int16 amin, int16 amax)
 				code = *inbuf++;
 
 				curSample += WSTable2Bit[code & 0x03];
-				curSample = CLIP(curSample, 0, 255);
+				curSample = scummvm_CLIP(curSample, 0, 255);
 				*outbuf++ = curSample;
 
 				curSample += WSTable2Bit[(code >> 2) & 0x03];
-				curSample = CLIP(curSample, 0, 255);
+				curSample = scummvm_CLIP(curSample, 0, 255);
 				*outbuf++ = curSample;
 
 				curSample += WSTable2Bit[(code >> 4) & 0x03];
-				curSample = CLIP(curSample, 0, 255);
+				curSample = scummvm_CLIP(curSample, 0, 255);
 				*outbuf++ = curSample;
 
 				curSample += WSTable2Bit[(code >> 6) & 0x03];
-				curSample = CLIP(curSample, 0, 255);
+				curSample = scummvm_CLIP(curSample, 0, 255);
 				*outbuf++ = curSample;
 
 				outsize -= 4;
@@ -3141,8 +3156,8 @@ int32 dimuse_compDecode(byte *src, byte *dst) {
 
 int32 decompressADPCM(byte *compInput, byte *compOutput, int channels) {
 
-inline int32 CLIP(int32 v, int32 amin, int32 amax)
-		{ if (v < amin) return amin; else if (v > amax) return amax; else return v; }
+//inline int32 CLIP(int32 v, int32 amin, int32 amax)
+//		{ if (v < amin) return amin; else if (v > amax) return amax; else return v; }
 
 const int16 _imaTable[89] = {
 		7,    8,    9,   10,   11,   12,   13,   14,
@@ -3203,7 +3218,7 @@ static const byte imxOtherTable[6][64] = {
     static byte    *_destImcTable = NULL;
     static uint32  *_destImcTable2 = NULL;
 
-void initializeImcTables() {
+//void initializeImcTables() {
 	int pos;
 
 	if (!_destImcTable) _destImcTable = (byte *)calloc(89, sizeof(byte));
@@ -3241,9 +3256,8 @@ void initializeImcTables() {
 			_destImcTable2[n + pos * 64] = put;
 		}
 	}
-}
-
-    initializeImcTables();
+//}
+    //initializeImcTables();
 
 	byte *src;
 
@@ -3352,14 +3366,14 @@ void initializeImcTables() {
 			outputWord += delta;
 
 			// Clip outputWord to 16 bit signed, and write it into the destination stream
-			outputWord = CLIP(outputWord, -0x8000, 0x7fff);
+			outputWord = scummvm_CLIP(outputWord, -0x8000, 0x7fff);
 			WRITE_BE_UINT16(dst + destPos, outputWord);
 			destPos += channels << 1;
 
 			// Adjust the curTablePos
 			curTablePos += (int8)imxOtherTable[curTableEntryBitCount - 2][data];
             #define decompressADPCM_ARRAYSIZE(x) ((int)(sizeof(x) / sizeof(x[0])))
-			curTablePos = CLIP(curTablePos, 0, decompressADPCM_ARRAYSIZE(_imaTable) - 1);
+			curTablePos = scummvm_CLIP(curTablePos, 0, decompressADPCM_ARRAYSIZE(_imaTable) - 1);
 		}
 	}
 
@@ -3374,7 +3388,7 @@ void initializeImcTables() {
 
 
 int MohawkBitmap__unpackRiven(byte *data, int datasz, byte *dst) {
-
+#if defined(__GNUC__) && !defined(__clang__)
 byte getLastTwoBits(byte c) {
 	return (c & 0x03);
 }
@@ -3618,6 +3632,9 @@ void MohawkBitmap__handleRivenSubcommandStream(byte **ret_data, byte count, byte
 		}
 	}
     return dst - bck;
+#else
+    return -1;
+#endif
 }
 
 
@@ -3652,6 +3669,7 @@ int MohawkBitmap__drawRLE8(byte *in, byte *out, int remaining) {
 
 
 int LzhDecompressor__decompress(byte *source, byte *dest, uint32 sourceLen, uint32 destLen) {
+#if defined(__GNUC__) && !defined(__clang__)
     byte *bck = dest;
 
 const uint BITBUFSIZ = 16;
@@ -4032,6 +4050,9 @@ void LzhDecompressor__decode(uint count, byte buffer[]) {
 	free(buffer);
 
 	return dest - bck;
+#else
+    return -1;
+#endif
 }
 
 
@@ -4041,7 +4062,7 @@ void LzhDecompressor__decode(uint count, byte buffer[]) {
 
 
 uint32 AnimationDecoder__decode_data(byte *src, int srcsz, byte *dest) {
-
+#if defined(__GNUC__) && !defined(__clang__)
     byte *pSrc = src;
     byte *pDest = dest;
 
@@ -4259,6 +4280,9 @@ void AnimationDecoder__decode_data_2(byte *src, int srcsz, byte **ret_pSrc, uint
 
 	// Return number of bytes written
 	return pDest - dest;
+#else
+    return -1;
+#endif
 }
 
 
@@ -4320,6 +4344,7 @@ int MusicPlayerMac_t7g__decompressMidi(byte *stream, int streamsz, byte *output,
 
 
 int StuffItArchive__decompress14(byte *src, int srcsz, byte *dst, uint32 uncompressedSize) {
+#if defined(__GNUC__) && !defined(__clang__)
     int isMSB2LSB = 0;
     int isLE = 0;
 
@@ -4709,6 +4734,9 @@ void StuffItArchive__readTree14(byte *bits, SIT14Data *dat, uint16 codesize, uin
 	free(dat);
 
 	return uncompressedSize;
+#else
+    return -1;
+#endif
 }
 
 
@@ -5003,7 +5031,7 @@ int MSRLEDecoder__decode8(byte *stream, int streamsz, byte *data, int size) {
 
 
 int unarj(byte *_compressed, int _compressed_size, byte *_outstream, int _outstream_size, int method4) {
-
+#if defined(__GNUC__) && !defined(__clang__)
 #define ARJ_CBIT		 9
 #define ARJ_PBIT		 5
 #define ARJ_TBIT		 5
@@ -5452,6 +5480,9 @@ void ArjDecoder__decode_f(int32 origsize) {
 
     return _outstream - bck;
 
+#else
+    return -1;
+#endif
 }
 
 
@@ -5461,12 +5492,12 @@ void ArjDecoder__decode_f(int32 origsize) {
 
 
 
-    int FabDecompressor__bitsLeft;
-    uint32 FabDecompressor__bitBuffer;
-	const byte *FabDecompressor__srcData, *FabDecompressor__srcP;
-	int FabDecompressor__srcSize;
+    static int FabDecompressor__bitsLeft;
+    static uint32 FabDecompressor__bitBuffer;
+	static const byte *FabDecompressor__srcData, *FabDecompressor__srcP;
+	static int FabDecompressor__srcSize;
 
-int FabDecompressor__getBit() {
+static int FabDecompressor__getBit() {
 	FabDecompressor__bitsLeft--;
 	if (FabDecompressor__bitsLeft == 0) {
 		if (FabDecompressor__srcP - FabDecompressor__srcData == FabDecompressor__srcSize)

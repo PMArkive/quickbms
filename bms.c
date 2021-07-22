@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2019 Luigi Auriemma
+    Copyright 2009-2021 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,16 +25,39 @@
 // the rule is simple: start_bms is executed for EACH recursive command like do, for, if
 int start_bms(int startcmd, int nop, int this_is_a_cycle, int *invoked_if, int *invoked_break, int *invoked_continue, u8 **invoked_label) {
 
-#define NEW_START_BMS(B,X,Y,Z) \
-    cmd = B(X, Y, Z, invoked_if, invoked_break, invoked_continue, invoked_label); \
-    if(cmd < 0) goto quit_error; \
+#define BMS_QUIT_ERROR      { quit = 1;  break; }
+#define BMS_QUIT_NO_ERROR   { quit = -1; break; }
 
-#define CONTINUE_START_BMS \
-    if((nop < 0) && this_is_a_cycle) { \
-        nop = 0; \
-        *invoked_continue = 0; \
+#define BMS_START_NEW(B,X,Y,Z) \
+    cmd = B(X, Y, Z, invoked_if, invoked_break, invoked_continue, invoked_label); \
+    if(cmd < 0) BMS_QUIT_ERROR \
+
+#define BMS_START_RESET \
+    if(startcmd < 0) { \
+        cmd = 0;    /* needed because it's the beginning */ \
     } else { \
-        if(nop) goto quit; \
+        cmd = startcmd; \
+    }
+
+#define BMS_END_OF_LOOP_RESET \
+    BMS_START_RESET \
+    cmd--;  /* due to "cmd++" */
+
+#define BMS_END_OF_LOOP \
+    if(*invoked_label) { \
+        if(!invoked_label_loop) { \
+            invoked_label_loop++; \
+            BMS_END_OF_LOOP_RESET \
+        } else { \
+            BMS_QUIT_NO_ERROR \
+        } \
+    } else { \
+        if((nop < 0) && this_is_a_cycle) { \
+            nop = 0; \
+            *invoked_continue = 0; \
+        } else { \
+            if(nop) BMS_QUIT_NO_ERROR \
+        } \
     }
 
     int     this_if         = 0;
@@ -42,9 +65,11 @@ int start_bms(int startcmd, int nop, int this_is_a_cycle, int *invoked_if, int *
     int     this_continue   = 0;
     u8      *this_label     = NULL;
 
-    int     cmd,
-            tmp;
-    u8      *error  = NULL;
+    int     cmd;
+    int     quit            = 0;
+    u8      *error          = NULL;
+
+    i32     invoked_label_loop  = 0;
 
     if(!invoked_if)       invoked_if        = &this_if;
     if(!invoked_break)    invoked_break     = &this_break;
@@ -58,18 +83,33 @@ int start_bms(int startcmd, int nop, int this_is_a_cycle, int *invoked_if, int *
         invoked_continue = &this_continue;
     }
 
-    // do not use redo_time limiters, this feature requires endless loops
-redo:
-
-    if(startcmd < 0) {
-        cmd = 0;    // needed because it's the beginning
-    } else {
-        cmd = startcmd;
+    if(g_debug_output) {
+        xdebug_print(0, this_is_a_cycle ? "[" : "{", -1, NULL, -1, 0, 0);
+        g_debug_output->level++;
     }
-    if(g_verbose > 0) printf("             .start_bms start: %d %d %d/%d\n", (i32)startcmd, (i32)nop, (i32)*invoked_break, (i32)*invoked_continue);
-    for(; CMD.type != CMD_NONE; cmd++) {
 
-        if(!nop) {
+    // do not use redo_time limiters, this feature requires endless loops
+
+    BMS_START_RESET
+    if(g_verbose > 0) printf("             .start_bms start: %d %d %d/%d\n", (i32)startcmd, (i32)nop, (i32)*invoked_break, (i32)*invoked_continue);
+    for(;; cmd++) {
+
+        if(CMD.type == CMD_NONE) {
+            if(*invoked_label) {
+                if(!invoked_label_loop) {
+                    invoked_label_loop++;
+                    BMS_START_RESET
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if(!nop)
+        {
+            if(*invoked_label)    nop = 1;  // break and continue get resetted at end of cycle
             if(*invoked_break)    nop = 1;
             if(*invoked_continue) nop = -1;
         }
@@ -94,19 +134,19 @@ redo:
             case CMD_For: {
                 //if(nop) break;
                 //if(g_verbose < 0) printf(".\n");  // useful
-                NEW_START_BMS(start_bms, cmd + 1, nop, 1)
+                BMS_START_NEW(start_bms, cmd + 1, nop, 1)
                 break;
             }
             case CMD_Next: {
-                CONTINUE_START_BMS
-                if(CMD_Next_func(cmd) < 0) goto quit_error;
-                if(startcmd >= 0) cmd = startcmd - 1;   // due to "cmd++"
+                BMS_END_OF_LOOP
+                if(CMD_Next_func(cmd) < 0) BMS_QUIT_ERROR
+                BMS_END_OF_LOOP_RESET
                 break;
             }
             case CMD_Prev: {
-                CONTINUE_START_BMS
-                if(CMD_Prev_func(cmd) < 0) goto quit_error;
-                if(startcmd >= 0) cmd = startcmd - 1;   // due to "cmd++"
+                BMS_END_OF_LOOP
+                if(CMD_Prev_func(cmd) < 0) BMS_QUIT_ERROR
+                BMS_END_OF_LOOP_RESET
                 break;
             }
             case CMD_ForTo: {
@@ -117,75 +157,75 @@ redo:
             }
             case CMD_Get: {
                 if(nop) break;
-                if(CMD_Get_func(cmd) < 0) goto quit_error;
+                if(CMD_Get_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_GetDString: {
                 if(nop) break;
-                if(CMD_GetDString_func(cmd) < 0) goto quit_error;
+                if(CMD_GetDString_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_GoTo: {
                 if(nop) break;
-                if(CMD_GoTo_func(cmd) < 0) goto quit_error;
+                if(CMD_GoTo_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_IDString: {
                 if(nop) break;
                 if(CMD_IDString_func(cmd) < 0) {
                     error = "the signature doesn't match";        
-                    goto quit_error;
+                    BMS_QUIT_ERROR
                 }
                 break;
             }
             case CMD_Log: {
                 if(nop) break;
-                if(CMD_Log_func(cmd) < 0) goto quit_error;
+                if(CMD_Log_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_CLog: {
                 if(nop) break;
-                if(CMD_CLog_func(cmd) < 0) goto quit_error;
+                if(CMD_CLog_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Math: {
                 if(nop) break;
-                if(CMD_Math_func(cmd) < 0) goto quit_error;
+                if(CMD_Math_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_XMath: {
                 if(nop) break;
-                if(CMD_XMath_func(cmd) < 0) goto quit_error;
+                if(CMD_XMath_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_NameCRC: {
                 if(nop) break;
-                if(CMD_NameCRC_func(cmd) < 0) goto quit_error;
+                if(CMD_NameCRC_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Codepage: {
                 if(nop) break;
-                if(CMD_Codepage_func(cmd) < 0) goto quit_error;
+                if(CMD_Codepage_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_SLog: {
                 if(nop) break;
-                if(CMD_SLog_func(cmd) < 0) goto quit_error;
+                if(CMD_SLog_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_SavePos: {
                 if(nop) break;
-                if(CMD_SavePos_func(cmd) < 0) goto quit_error;
+                if(CMD_SavePos_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Set: {
                 if(nop) break;
-                if(CMD_Set_func(cmd) < 0) goto quit_error;
+                if(CMD_Set_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_String: {
                 if(nop) break;
-                if(CMD_String_func(cmd) < 0) goto quit_error;
+                if(CMD_String_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_If:
@@ -195,72 +235,72 @@ redo:
             case CMD_Else: {
                 //if(nop) break;
                 if(!*invoked_if && (check_condition(cmd, -1, NULL, -1) == TRUE)) {
-                    NEW_START_BMS(start_bms, cmd + 1, nop, 0)
+                    BMS_START_NEW(start_bms, cmd + 1, nop, 0)
                     *invoked_if = 1;
                 } else {
-                    NEW_START_BMS(start_bms, cmd + 1, 1,   0)
+                    BMS_START_NEW(start_bms, cmd + 1, 1,   0)
                 }
                 break;
             }
             case CMD_If_Return: {
                 //if(nop) break;
-                goto quit;
+                BMS_QUIT_NO_ERROR
                 break;
             }
             case CMD_EndIf: {
                 *invoked_if = 0;
                 //if(nop) break;
-                goto quit;
+                BMS_QUIT_NO_ERROR
                 break;
             }
             case CMD_GetCT: {
                 if(nop) break;
-                if(CMD_GetCT_func(cmd) < 0) goto quit_error;
+                if(CMD_GetCT_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_ComType: {
                 if(nop) break;
-                if(CMD_ComType_func(cmd, NULL, NULL, 0) < 0) goto quit_error;
+                if(CMD_ComType_func(cmd, NULL, NULL, 0) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Open: {
                 if(nop) break;
-                if(CMD_Open_func(cmd) < 0) goto quit_error;
+                if(CMD_Open_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_ReverseShort: {
                 if(nop) break;
-                if(CMD_ReverseShort_func(cmd) < 0) goto quit_error;
+                if(CMD_ReverseShort_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_ReverseLong: {
                 if(nop) break;
-                if(CMD_ReverseLong_func(cmd) < 0) goto quit_error;
+                if(CMD_ReverseLong_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_ReverseLongLong: {
                 if(nop) break;
-                if(CMD_ReverseLongLong_func(cmd) < 0) goto quit_error;
+                if(CMD_ReverseLongLong_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Endian: {
                 if(nop) break;
-                if(CMD_Endian_func(cmd) < 0) goto quit_error;
+                if(CMD_Endian_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_FileXOR: {
                 if(nop) break;
-                if(CMD_FileXOR_func(cmd) < 0) goto quit_error;
+                if(CMD_FileXOR_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_FileRot13: {
                 if(nop) break;
-                if(CMD_FileRot13_func(cmd) < 0) goto quit_error;
+                if(CMD_FileRot13_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_FileCrypt: {
                 if(nop) break;
-                if(CMD_FileCrypt_func(cmd) < 0) goto quit_error;
+                if(CMD_FileCrypt_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Break: {
@@ -277,160 +317,172 @@ redo:
             }
             case CMD_GetVarChr: {
                 if(nop) break;
-                if(CMD_GetVarChr_func(cmd) < 0) goto quit_error;
+                if(CMD_GetVarChr_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_PutVarChr: {
                 if(nop) break;
-                if(CMD_PutVarChr_func(cmd) < 0) goto quit_error;
+                if(CMD_PutVarChr_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Append: {
                 if(nop) break;
-                if(CMD_Append_func(cmd) < 0) goto quit_error;
+                if(CMD_Append_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Encryption: {
                 if(nop) break;
-                if(CMD_Encryption_func(cmd, 0) < 0) goto quit_error;
+                if(CMD_Encryption_func(cmd, 0) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_GetArray: {
                 if(nop) break;
-                if(CMD_GetArray_func(cmd) < 0) goto quit_error;
+                if(CMD_GetArray_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_PutArray: {
                 if(nop) break;
-                if(CMD_PutArray_func(cmd) < 0) goto quit_error;
+                if(CMD_PutArray_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_SortArray: {
                 if(nop) break;
-                if(CMD_SortArray_func(cmd) < 0) goto quit_error;
+                if(CMD_SortArray_func(cmd) < 0) BMS_QUIT_ERROR
+                break;
+            }
+            case CMD_SearchArray: {
+                if(nop) break;
+                if(CMD_SearchArray_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_StartFunction: {
                 //if(nop) break;
-                NEW_START_BMS(CMD_Function_func, cmd, 1,   1)
+                BMS_START_NEW(CMD_Function_func, cmd, 1,   1)
                 break;
             }
             case CMD_CallFunction: {
                 if(nop) break;
                 if(g_verbose < 0) printf(".\n");  // useful
-                NEW_START_BMS(CMD_Function_func, cmd, nop, 1)
+                BMS_START_NEW(CMD_Function_func, cmd, nop, 1)
                 break;
             }
             case CMD_EndFunction: {
-                if(nop) goto quit;
-                goto quit;
+                if(nop) BMS_QUIT_NO_ERROR
+                BMS_QUIT_NO_ERROR
                 break;
             }
             case CMD_Debug: {
                 if(nop) break;
                 //verbose = !verbose;
-                if(CMD_Debug_func(cmd) < 0) goto quit_error;
+                if(CMD_Debug_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Padding: {
                 if(nop) break;
-                if(CMD_Padding_func(cmd) < 0) goto quit_error;
+                if(CMD_Padding_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_ScanDir: {
                 if(nop) break;
-                if(CMD_ScanDir_func(cmd) < 0) goto quit_error;
+                if(CMD_ScanDir_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_CallDLL: {
                 if(nop) break;
-                if(CMD_CallDLL_func(cmd, NULL, 0, NULL, 0) < 0) goto quit_error;
+                if(CMD_CallDLL_func(cmd, NULL, 0, NULL, 0) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Put: {
                 if(nop) break;
-                if(CMD_Put_func(cmd) < 0) goto quit_error;
+                if(CMD_Put_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_PutDString: {
                 if(nop) break;
-                if(CMD_PutDString_func(cmd) < 0) goto quit_error;
+                if(CMD_PutDString_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_PutCT: {
                 if(nop) break;
-                if(CMD_PutCT_func(cmd) < 0) goto quit_error;
+                if(CMD_PutCT_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Strlen: {
                 if(nop) break;
-                if(CMD_Strlen_func(cmd) < 0) goto quit_error;
+                if(CMD_Strlen_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_Do: {
                 //if(nop) break;
                 if(g_verbose < 0) printf(".\n");  // useful
-                NEW_START_BMS(start_bms, cmd + 1, nop, 1)
+                BMS_START_NEW(start_bms, cmd + 1, nop, 1)
                 break;
             }
             case CMD_While: {
-                CONTINUE_START_BMS
-                if(check_condition(cmd, -1, NULL, -1) == FALSE) goto quit;
-                if(startcmd >= 0) cmd = startcmd - 1;   // due to "cmd++"
+                BMS_END_OF_LOOP
+                if(check_condition(cmd, -1, NULL, -1) == FALSE) BMS_QUIT_NO_ERROR
+                BMS_END_OF_LOOP_RESET
                 break;
             }
             case CMD_Print: {
                 if(nop) break;
-                if(CMD_Print_func(cmd) < 0) goto quit_error;
+                if(CMD_Print_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_FindLoc: {
                 if(nop) break;
                 if(CMD_FindLoc_func(cmd) < 0) {
                     error = "the searched string has not been found";
-                    goto quit_error;
+                    BMS_QUIT_ERROR
                 }
                 break;
             }
             case CMD_GetBits: {
                 if(nop) break;
-                if(CMD_GetBits_func(cmd) < 0) goto quit_error;
+                if(CMD_GetBits_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_PutBits: {
                 if(nop) break;
-                if(CMD_PutBits_func(cmd) < 0) goto quit_error;
+                if(CMD_PutBits_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_ImpType: {
                 if(nop) break;
-                if(CMD_ImpType_func(cmd) < 0) goto quit_error;
+                if(CMD_ImpType_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_CleanExit: {
                 if(nop) break;  // don't touch
                 error = "invoked the termination of the extraction (CleanExit)";
-                goto quit_error;
+                BMS_QUIT_ERROR
                 break;
             }
             case CMD_Label: {
                 //if(nop) break;
                 if(*invoked_label && CMD_Label_func(cmd, *invoked_label)) {
-                    *invoked_label    = NULL;
-                    *invoked_break    = 0;
-                    *invoked_continue = 0;
+                    *invoked_label      = NULL;
+                    *invoked_break      = 0;
+                    *invoked_continue   = 0;
+                    invoked_label_loop  = 0;
                     nop = 0;
                 }
                 break;
             }
+            case CMD_Reimport: {
+                if(nop) break;
+                if(CMD_Reimport_func(cmd) < 0) BMS_QUIT_ERROR
+                break;
+            }
+            // internal
             case CMD_DirectoryExists: {
                 if(nop) break;
-                if(CMD_DirectoryExists_func(cmd) < 0) goto quit_error;
+                if(CMD_DirectoryExists_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_FEof: {
                 if(nop) break;
-                if(CMD_FEof_func(cmd) < 0) goto quit_error;
+                if(CMD_FEof_func(cmd) < 0) BMS_QUIT_ERROR
                 break;
             }
             case CMD_NOP: {
@@ -444,20 +496,40 @@ redo:
                 break;
             }
         }
+
+        if(quit) break;   // we no longer use goto redo/quit/quit, do not move into the for()
     }
 
-    // necessary for the labels above the current line, yeah it's an endless loop if continue/break are wrongly used
-    if(*invoked_label) goto redo;
-    return -1; // CMD_NONE
-quit_error:
-    //if(*invoked_label) goto redo;
-    if(g_verbose > 0) fprintf(stderr, "\nError: %s\n", error ? error : (u8 *)"something wrong during the extraction");
-    //myexit(QUICKBMS_ERROR_BMS);
-    return -1;
-quit:
-    //if(*invoked_label) goto redo;
-    if(g_verbose > 0) fprintf(stderr, "             .start_bms end: %d %d %d/%d (ret %d)\n", (i32)startcmd, (i32)nop, (i32)*invoked_break, (i32)*invoked_continue, (i32)cmd);
+    if(!quit) {
+        cmd = -1; //return -1; // CMD_NONE
+    }
+    if(quit >= 0) { // was quit_error:
+        if(cmd >= 0) {
+            //if(*invoked_label) goto redo;
+            if(g_verbose > 0) fprintf(stderr, "\nError: %s\n", error ? error : (u8 *)"something wrong during the extraction");
+            //myexit(QUICKBMS_ERROR_BMS);
+            cmd = -1; //return -1;
+        }
+    }
+    // was quit:
+    if(cmd >= 0) {
+        //if(*invoked_label) goto redo;
+        if(g_verbose > 0) fprintf(stderr, "             .start_bms end: %d %d %d/%d (ret %d)\n", (i32)startcmd, (i32)nop, (i32)*invoked_break, (i32)*invoked_continue, (i32)cmd);
+    }
+    if(g_debug_output) {
+        g_debug_output->level--;
+        xdebug_print(0, this_is_a_cycle ? "]," : "},", -1, NULL, -1, 0, 0);
+    }
     return(cmd);
+}
+
+
+
+void check_g_command(int cmd) {
+    if(cmd >= MAX_CMDS) {
+        fprintf(stderr, "\nError: the BMS script uses more commands than those supported by this tool (%d / %d)\n", (i32)cmd, (i32)MAX_CMDS);
+        myexit(QUICKBMS_ERROR_BMS);
+    }
 }
 
 
@@ -577,6 +649,7 @@ redo:
     } while(!line[0]);
 
     if(cmd >= 0) {
+        check_g_command(cmd);
         CMD.bms_line_number = g_bms_line_number;
         CMD.debug_line = realloc(CMD.debug_line, 32 + strlen(line) + 1);
         if(!CMD.debug_line) STD_ERR(QUICKBMS_ERROR_MEMORY);
@@ -635,7 +708,7 @@ redo:
                 if(*p == '\'') break;
 
                 if(i < sizeof(int)) {
-                    cstring(p, tmp, 1, &c);
+                    cstring(p, tmp, 1, &c, NULL);
                     sprintf(tmpchars[argi] + strlen(tmpchars[argi]), "%02x", tmp[0]);
                     i++;
                 }
@@ -746,24 +819,19 @@ void set_quickbms_arg(u8 *quickbms_arg) {
 
 // zlib + base64
 u8 *type_decompress(u8 *str, int *ret_len) {
-    int     len,
-            tmp;
-    i32     t32;
-    u8      *ret;
-
+    int     len;
     if(ret_len) *ret_len = 0;
-    if(!str) goto quit;
-    len = unbase64(str, -1, str, -1);   // use the same buffer
-    if(len < 0) goto quit;  //return(str)
-    tmp = 0;
-    ret = NULL;
-    t32 = tmp;
-    len = unzip_dynamic(str, len, &ret, &t32, 0);
-    tmp = t32;
-    if(len < 0) goto quit;  //return(str)
-    if(ret_len) *ret_len = len;
-    return ret;
-quit:
+    if(str) {
+        len = unbase64(str, -1, str, -1);   // use the same buffer
+        if(len >= 0) {
+            u8  *ret = NULL;
+            len = unzip_dynamic(str, len, &ret, NULL, 0);
+            if(len >= 0) {
+                if(ret_len) *ret_len = len;
+                return ret;
+            }
+        }
+    }
     fprintf(stderr, "\nError: failed Set type decompression at line %d, recheck your script\n", (i32)g_bms_line_number);
     myexit(QUICKBMS_ERROR_BMS);
     return NULL;
@@ -826,7 +894,7 @@ int c_structs(u8 *argument[MAX_ARGS + 1], int argc, int *ret_cmd) {
     fprintf(stderr, "\n");
 
     for(i = 0; i <= argc; i++) {
-        if(!strnicmp(ARG[i], MEMORY_FNAME, MEMORY_FNAMESZ)) {
+        if(is_MEMORY_FILE(ARG[i])) {
             filenum = myatoifile(ARG[i]);
             ARG[i] = "";
         }
@@ -1256,7 +1324,7 @@ int c_structs(u8 *argument[MAX_ARGS + 1], int argc, int *ret_cmd) {
         if(type == BMS_TYPE_BITS) {
             ARG[0] = put ? "putbits" : "getbits";
             // ARG[1] is ok
-            sprintf(tmp, "%.*s", sizeof(tmp) - 4, arrayp);
+            sprintf(tmp, "%.*s", (i32)(sizeof(tmp) - 4), arrayp);
             ARG[2] = tmp;
             argc = 2;
             if(filenum) ARG[++argc] = myitoa(filenum);
@@ -1265,13 +1333,13 @@ int c_structs(u8 *argument[MAX_ARGS + 1], int argc, int *ret_cmd) {
         ARG[0] = put ? "putdstring" : "getdstring";
         // ARG[1] is ok
         switch(type) {
-            case BMS_TYPE_BYTE:     sprintf(tmp, "%.*s",   sizeof(tmp) - 4, arrayp);    break;
-            case BMS_TYPE_SHORT:    sprintf(tmp, "%.*s*2", sizeof(tmp) - 4, arrayp);    break;
-            case BMS_TYPE_LONG:     sprintf(tmp, "%.*s*4", sizeof(tmp) - 4, arrayp);    break;
-            case BMS_TYPE_LONGLONG: sprintf(tmp, "%.*s*8", sizeof(tmp) - 4, arrayp);    break;
-            case BMS_TYPE_FLOAT:    sprintf(tmp, "%.*s*4", sizeof(tmp) - 4, arrayp);    break;
-            case BMS_TYPE_DOUBLE:   sprintf(tmp, "%.*s*8", sizeof(tmp) - 4, arrayp);    break;
-            default:                sprintf(tmp, "%.*s*4", sizeof(tmp) - 4, arrayp);    break;
+            case BMS_TYPE_BYTE:     sprintf(tmp, "%.*s",   (i32)(sizeof(tmp) - 4), arrayp); break;
+            case BMS_TYPE_SHORT:    sprintf(tmp, "%.*s*2", (i32)(sizeof(tmp) - 4), arrayp); break;
+            case BMS_TYPE_LONG:     sprintf(tmp, "%.*s*4", (i32)(sizeof(tmp) - 4), arrayp); break;
+            case BMS_TYPE_LONGLONG: sprintf(tmp, "%.*s*8", (i32)(sizeof(tmp) - 4), arrayp); break;
+            case BMS_TYPE_FLOAT:    sprintf(tmp, "%.*s*4", (i32)(sizeof(tmp) - 4), arrayp); break;
+            case BMS_TYPE_DOUBLE:   sprintf(tmp, "%.*s*8", (i32)(sizeof(tmp) - 4), arrayp); break;
+            default:                sprintf(tmp, "%.*s*4", (i32)(sizeof(tmp) - 4), arrayp); break;
         }
         ARG[2] = tmp;
         argc = 2;
@@ -1329,13 +1397,14 @@ quit2:
 
 
 
-int calc_quickbms_version(u8 *version) {
+int quickbmsver(u8 *version) {
     int     n,
             len,
             ret,
             seq,
             plen;
     u8      *p,
+            *l,
             *filter_in_files_tmp = NULL;
 
     if(!version) return 0;
@@ -1355,14 +1424,14 @@ int calc_quickbms_version(u8 *version) {
                 #ifdef QUICKBMS64
                 #else
                     fprintf(stderr,
-                        "- the script requires the usage of quickbms_4gb_files.exe\n");
+                        "\n\nError: the script requires quickbms_4gb_files.exe\n\n");
                     myexit(QUICKBMS_ERROR_BMS);
                 #endif
                 len += 2;
             } else if((p[1] == '3') && (p[2] == '2')) { // "32"
                 #ifdef QUICKBMS64
                     fprintf(stderr,
-                        "- the script requires the usage of quickbms.exe\n");
+                        "\n\nError: the script requires quickbms.exe\n\n");
                     myexit(QUICKBMS_ERROR_BMS);
                 #endif
                 len += 2;
@@ -1371,6 +1440,7 @@ int calc_quickbms_version(u8 *version) {
                     case '9':
                         if(XDBG_ALLOC_ACTIVE) {
                             fprintf(stderr,
+                                "\n"
                                 "- the script requires the disabling of the secure allocation XDBG_ALLOC_ACTIVE\n"
                                 "  this operation may have negative security effects so consider it only if the\n"
                                 "  script comes from a trusted source.\n"
@@ -1386,7 +1456,7 @@ int calc_quickbms_version(u8 *version) {
                     case 'T': g_keep_temporary_file     = 1;    break;  // in some rare scripts may be helpful to keep the temporary file
                     case 'd': g_quickbms_outname        = 1;    break;
                     case 'D': g_quickbms_outname        = -1;   break;
-                    case 'e': g_ignore_comp_errors      = 1;    break;  // mainly for debugging
+                    case 'e': g_ignore_comp_errors      = 1;    break;  // now useful in reimport mode
                     case 'J': g_force_cstring           = 1;    break;
                     case 'F':
                         p += 2; // -F
@@ -1394,6 +1464,18 @@ int calc_quickbms_version(u8 *version) {
                         append_list(&filter_in_files_tmp, p);
                         len = -1; /*lame break, this is experimental since , and ; are already handled as separators*/
                         break;
+                    case 'x': g_decimal_notation        = 0;    break;
+                    case 'j': g_force_utf16             = -1;   break;
+                    case 'b':
+                        for(l = p; *l && (*l <= ' '); l++);
+                        g_log_filler_char         = ((l - p) == 1) ? p[0] : myatoi(p);
+                        p = l;
+                        break;
+                    // no need of -P for codepage since there is a command for that
+
+                    // experimental, it's not like the -c in command-line
+                    case 'c': g_c_structs_allowed       = 1;    break;
+
                     default: len--; /* to fix the next len++ */ break;
                 }
                 if(len < 0) break;
@@ -1443,6 +1525,7 @@ int set_uint_flex(int cmd, u8 *name, u8 *arg) {
         CMD.var[1] = add_var(0, mini, NULL, 0, -2);         // bits
         CMD.num[2] = 0;                                     // filenumber
         cmd++;
+        check_g_command(cmd);
     }
 
     sprintf(mini, "%u", max - min);
@@ -1453,6 +1536,7 @@ int set_uint_flex(int cmd, u8 *name, u8 *arg) {
 
     if(max < 32) {
         cmd++;
+        check_g_command(cmd);
         sprintf(mini, "%u", 32 - max);
         CMD.type   = CMD_GetBits;
         CMD.var[0] = add_var(0, QUICKBMS_DUMMY, NULL, 0, -2); // varname
@@ -1465,6 +1549,20 @@ int set_uint_flex(int cmd, u8 *name, u8 *arg) {
 
 
 
+int bms_get_endian(u8 *arg) {
+    if(arg) {
+        if(!stricmp(arg, "little") || !stricmp(arg, "intel") || !stricmp(arg, "4321") || strstr(arg, "44332211")) {
+            return MYLITTLE_ENDIAN;
+        }
+        if(!stricmp(arg, "big") || !stricmp(arg, "network")  || !stricmp(arg, "1234") || strstr(arg, "11223344")) {
+            return MYBIG_ENDIAN;
+        }
+    }
+    return -1;
+}
+
+
+
 void set_cmd_args_ptr(int cmd, int idx, u8 *arg) {
     CMD.num[idx] = 0;                       // &var disabled
     if(!arg) return;
@@ -1472,7 +1570,7 @@ void set_cmd_args_ptr(int cmd, int idx, u8 *arg) {
         CMD.num[idx] = 1;                   // &var enabled
         arg++;
     }
-    if(!strnicmp(arg, MEMORY_FNAME, MEMORY_FNAMESZ)) {
+    if(is_MEMORY_FILE(arg)) {
         CMD.var[idx] = get_memory_file(arg);
     } else {
         CMD.var[idx] = add_var(0, arg, NULL, 0, -2);
@@ -1590,6 +1688,23 @@ int set_cmd_string_op(u8 *str) {
 
 
 
+#define CMD_FileXOR_bms \
+    CMD.num[0] = 0; /* used to contain the size of str[0], improves the performances */ \
+    if(myisdigit(ARG[1][0]) || (ARG[1][0] == '\\')) { \
+        NUMS2BYTES(ARG[1], CMD.num[1], CMD.str[0], CMD.num[0], 0)  /* acts like a realloc */ \
+    } else { \
+        CMD.var[0] = parse_bms_add_var(1);              /* string */ \
+    } \
+    CMD.num[2] = 0;                                     /* reset pos */ \
+    if(argc == 1) { \
+        CMD.num[4] = -(MAX_FILES + 1);                  /* all the files, DO NOT use MAX_FILES+1 because _FILEZ() will corrupt it */ \
+    } else { \
+        CMD.var[3] = parse_bms_add_var(2);              /* first position offset (used only for Log and multiple bytes in rare occasions) */ \
+        CMD.num[4] = myatoifile(ARG[3]);                /* filenumber (not implemented) */ \
+    }
+
+
+
 int parse_bms(FILE *fds, u8 *inputs, int cmd, int eol_mode) {
     FILE    *include_fd;
     int     i,
@@ -1617,13 +1732,10 @@ int parse_bms(FILE *fds, u8 *inputs, int cmd, int eol_mode) {
     c_structs(NULL, 0, NULL);
 
     for(;;) {       // do NOT use "continue;"!
-        if(cmd >= MAX_CMDS) {
-            fprintf(stderr, "\nError: the BMS script uses more commands than those supported by this tool (%d / %d)\n", (i32)cmd, (i32)MAX_CMDS);
-            myexit(QUICKBMS_ERROR_BMS);
-        }
+        check_g_command(cmd);
 
         // never do memset because commands are initialized in a particular way (check bms_init)
-        //memset(&g_command[cmd], 0, sizeof(g_command[cmd]));
+        //memset(&g_command[cmd], 0, sizeof(command_t));
 
         argc = bms_line(fds, &inputs, argument, cmd, is_const, eol_mode); //&debug_line);
         if(argc < 0) break; // means "end of file"
@@ -1636,7 +1748,7 @@ int parse_bms(FILE *fds, u8 *inputs, int cmd, int eol_mode) {
 redo:
                if(!stricmp(ARG[0], "QuickBMSver")   && (argc >= 1)) {
             CMD.type   = CMD_NOP;
-            t = calc_quickbms_version(ARG[1]);
+            t = quickbmsver(ARG[1]);
             if(t && (t > g_quickbms_version)) {
                 fprintf(stderr, "\n"
                     "Error: this script has been created for a newer version of QuickBMS:\n"
@@ -1681,6 +1793,9 @@ redo:
                 CMD.num[3] = add_datatype("string");
             }
             CMD.num[4] = myatoifile(ARG[5]);                    // filenumber
+            if(argc >= 6) {
+                CMD.var[5] = parse_bms_add_var(6);              // tag
+            }
 
         } else if(
                  (!stricmp(ARG[0], "Do")            && (argc >= 0))
@@ -1691,7 +1806,12 @@ redo:
             CMD.type   = CMD_FindLoc;
             CMD.var[0] = parse_bms_add_var(1);                  // var
             CMD.num[1] = add_datatype(ARG[2]);                  // datatype
-            CSTRING(2, ARG[3])                                  // text/number
+            if(CMD.num[1] == BMS_TYPE_REGEX) {                  // regex is just the string as-is
+                mystrdup(&CMD.str[2], ARG[3]);
+                CMD.num[2] = strlen(CMD.str[2]);
+            } else {
+                CSTRING(2, ARG[3])                              // text/number
+            }
             if(argc >= 4) {
                 if(!ARG[4][0]) {    // a typical mistake that I do too!
                     CMD.num[3] = 0;
@@ -1722,12 +1842,14 @@ redo:
                 CMD.num[1] = ARG[2][0];                         // operation
                 CMD.var[2] = parse_bms_add_var(3);              // Var/Number
                 cmd++;
+                check_g_command(cmd);
             }
 
             CMD.type   = CMD_For;   // yes, no arguments, this is the new way
 
             if(argc >= 5) {
                 cmd++;
+                check_g_command(cmd);
                 CMD.type   = CMD_ForTo;
                 CMD.var[0] = parse_bms_add_var(1);              // T
                                                                 // = T_value (check later, it must be check_condition compatible)
@@ -1745,6 +1867,9 @@ redo:
             CMD.var[0] = parse_bms_add_var(1);                  // varname
             CMD.num[1] = add_datatype(ARG[2]);                  // type
             CMD.num[2] = myatoifile(ARG[3]);                    // filenumber
+            if(argc >= 4) {
+                CMD.var[3] = parse_bms_add_var(4);
+            }
 
         } else if(!stricmp(ARG[0], "GetBits")       && (argc >= 2)) {
             CMD.type   = CMD_GetBits;
@@ -1944,6 +2069,7 @@ redo:
             CMD.num[1] = add_datatype("String");                // datatype
             CMD.var[2] = parse_bms_add_var(3);                  // Var/Number
             cmd++;
+            check_g_command(cmd);
             CMD.type   = CMD_Math;
             CMD.var[0] = parse_bms_add_var(1);                  // var1
             CMD.num[1] = '*';                                   // op
@@ -1955,6 +2081,7 @@ redo:
             CMD.num[1] = add_datatype("String");                // datatype
             CMD.var[2] = parse_bms_add_var(3);                  // Var/Number
             cmd++;
+            check_g_command(cmd);
             CMD.type   = CMD_Math;
             CMD.var[0] = parse_bms_add_var(1);                  // var1
             CMD.num[1] = '/';                                   // op
@@ -2019,7 +2146,7 @@ redo:
         } else if(!stricmp(ARG[0], "Set")           && (argc >= 2)) {
             CMD.type   = CMD_Set;
             //CMD.var[0] = parse_bms_add_var(1);                // VarName
-            if(!strnicmp(ARG[1], MEMORY_FNAME, MEMORY_FNAMESZ)) {
+            if(is_MEMORY_FILE(ARG[1])) {
                 CMD.var[0] = get_memory_file(ARG[1]);
             } else {
                 CMD.var[0] = parse_bms_add_var(1);
@@ -2110,7 +2237,7 @@ redo:
             CMD.var[2] = parse_bms_add_var(3);                  // VarName2
             CMD.num[0] = argc - 3;
             for(i = 4; i <= argc; i++) {
-                //if(!strnicmp(ARG[i], MEMORY_FNAME, MEMORY_FNAMESZ)) {
+                //if(is_MEMORY_FILE(ARG[i])) {
                     //CMD.var[i - 1] = get_memory_file(ARG[i]);
                 //} else {
                     CMD.var[i - 1] = parse_bms_add_var(i);
@@ -2132,6 +2259,7 @@ redo:
             mystrdup(&CMD.str[1], "=");                         // Criterium
             CMD.var[2] = parse_bms_add_var(2);                  // VarName2
             cmd++;
+            check_g_command(cmd);
             CMD.type   = CMD_EndIf;
 
         } else if(!stricmp(ARG[0], "If")            && (argc >= 3)) {
@@ -2149,6 +2277,7 @@ redo:
         } else if((!stricmp(ARG[0], "Elif") || !stricmp(ARG[0], "ElseIf")) && (argc >= 3)) {   // copy as above!
             CMD.type   = CMD_If_Return;
             cmd++;
+            check_g_command(cmd);
 
             CMD.type   = CMD_Elif;
             CMD.var[0] = parse_bms_add_var(1);                  // VarName1
@@ -2164,6 +2293,7 @@ redo:
         } else if(!stricmp(ARG[0], "Else")          && (argc >= 0)) {
             CMD.type   = CMD_If_Return;
             cmd++;
+            check_g_command(cmd);
 
             CMD.type   = CMD_Else;
             if((argc >= 4) && !stricmp(ARG[1], "If")) {         // copy as above!
@@ -2229,18 +2359,24 @@ redo:
               || (!stricmp(ARG[0], "FlipShort")     && (argc >= 1))) {  // mex inifile (not BMS)
             CMD.type   = CMD_ReverseShort;
             CMD.var[0] = parse_bms_add_var(1);                  // variable
+            CMD.num[1] = -1;
+            if(argc >= 2) CMD.num[1] = bms_get_endian(ARG[2]);
 
         } else if(
                  (!stricmp(ARG[0], "ReverseLong")   && (argc >= 1))
               || (!stricmp(ARG[0], "FlipLong")      && (argc >= 1))) {  // mex inifile (not BMS)
             CMD.type   = CMD_ReverseLong;
             CMD.var[0] = parse_bms_add_var(1);                  // variable
+            CMD.num[1] = -1;
+            if(argc >= 2) CMD.num[1] = bms_get_endian(ARG[2]);
 
         } else if(
                  (!stricmp(ARG[0], "ReverseLongLong")   && (argc >= 1))
               || (!stricmp(ARG[0], "FlipLongLong")      && (argc >= 1))) {  // mex inifile (not BMS)
             CMD.type   = CMD_ReverseLongLong;
             CMD.var[0] = parse_bms_add_var(1);                  // variable
+            CMD.num[1] = -1;
+            if(argc >= 2) CMD.num[1] = bms_get_endian(ARG[2]);
 
         } else if(!stricmp(ARG[0], "PROMPTUSER")    && (argc >= 0)) {   // mex inifile (not BMS)
             // do nothing, this command is useless
@@ -2278,11 +2414,9 @@ redo:
 
         } else if(!stricmp(ARG[0], "Endian")        && (argc >= 1)) {
             CMD.type   = CMD_Endian;
-            if(!stricmp(ARG[1], "little") || !stricmp(ARG[1], "intel") || !stricmp(ARG[1], "1234")) {
-                CMD.num[0] = MYLITTLE_ENDIAN;
-
-            } else if(!stricmp(ARG[1], "big") || !stricmp(ARG[1], "network") || !stricmp(ARG[1], "4321")) {
-                CMD.num[0] = MYBIG_ENDIAN;
+            t = bms_get_endian(ARG[1]);
+            if(t >= 0) {
+                CMD.num[0] = t;
 
             } else if(!stricmp(ARG[1], "guess32") || !stricmp(ARG[1], "guess")) {
                 CMD.num[0] = -2;
@@ -2321,51 +2455,15 @@ redo:
 
         } else if(!stricmp(ARG[0], "FileXOR")       && (argc >= 1)) {
             CMD.type   = CMD_FileXOR;
-            CMD.num[0] = 0; // used to contain the size of str[0], improves the performances
-            if(myisdigit(ARG[1][0]) || (ARG[1][0] == '\\')) {
-                NUMS2BYTES(ARG[1], CMD.num[1], CMD.str[0], CMD.num[0], 0)  // acts like a realloc
-            } else {
-                CMD.var[0] = parse_bms_add_var(1);              // string
-            }
-            CMD.num[2] = 0;                                     // reset pos
-            if(argc == 1) {
-                CMD.num[4] = 0;
-            } else {
-                CMD.var[3] = parse_bms_add_var(2);              // first position offset (used only for Log and multiple bytes in rare occasions)
-                CMD.num[4] = myatoifile(ARG[3]);                // filenumber (not implemented)
-            }
+            CMD_FileXOR_bms
 
         } else if(!strnicmp(ARG[0], "FileRot", 7)   && (argc >= 1)) {
             CMD.type   = CMD_FileRot13;
-            CMD.num[0] = 0; // used to contain the size of str[0], improves the performances
-            if(myisdigit(ARG[1][0]) || (ARG[1][0] == '\\')) {
-                NUMS2BYTES(ARG[1], CMD.num[1], CMD.str[0], CMD.num[0], 0)  // acts like a realloc
-            } else {
-                CMD.var[0] = parse_bms_add_var(1);              // string
-            }
-            CMD.num[2] = 0;                                     // reset pos
-            if(argc == 1) {
-                CMD.num[4] = 0;
-            } else {
-                CMD.var[3] = parse_bms_add_var(2);              // first position offset (used only for Log and multiple bytes in rare occasions)
-                CMD.num[4] = myatoifile(ARG[3]);                // filenumber (not implemented)
-            }
+            CMD_FileXOR_bms
 
         } else if(!stricmp(ARG[0], "FileCrypt")     && (argc >= 1)) {
             CMD.type   = CMD_FileCrypt;
-            CMD.num[0] = 0; // used to contain the size of str[0], improves the performances
-            if(myisdigit(ARG[1][0]) || (ARG[1][0] == '\\')) {
-                NUMS2BYTES(ARG[1], CMD.num[1], CMD.str[0], CMD.num[0], 0)  // acts like a realloc
-            } else {
-                CMD.var[0] = parse_bms_add_var(1);              // string
-            }
-            CMD.num[2] = 0;                                     // reset pos
-            if(argc == 1) {
-                CMD.num[4] = 0;
-            } else {
-                CMD.var[3] = parse_bms_add_var(2);              // first position offset (used only for Log and multiple bytes in rare occasions)
-                CMD.num[4] = myatoifile(ARG[3]);                // filenumber (not implemented)
-            }
+            CMD_FileXOR_bms
 
         } else if(!stricmp(ARG[0], "Break")         && (argc >= 0)) {
             CMD.type   = CMD_Break;
@@ -2388,7 +2486,7 @@ redo:
         } else if(!stricmp(ARG[0], "GetVarChr")     && (argc >= 3)) {
             CMD.type   = CMD_GetVarChr;
             CMD.var[0] = parse_bms_add_var(1);                  // dst byte
-            if(!strnicmp(ARG[2], MEMORY_FNAME, MEMORY_FNAMESZ)) {
+            if(is_MEMORY_FILE(ARG[2])) {
                 CMD.var[1] = get_memory_file(ARG[2]);
             } else {
                 CMD.var[1] = parse_bms_add_var(2);              // src var
@@ -2402,7 +2500,7 @@ redo:
 
         } else if(!stricmp(ARG[0], "PutVarChr")     && (argc >= 3)) {
             CMD.type   = CMD_PutVarChr;
-            if(!strnicmp(ARG[1], MEMORY_FNAME, MEMORY_FNAMESZ)) {
+            if(is_MEMORY_FILE(ARG[1])) {
                 CMD.var[0] = get_memory_file(ARG[1]);
             } else {
                 CMD.var[0] = parse_bms_add_var(1);              // dst var
@@ -2464,20 +2562,31 @@ redo:
 
         } else if(!stricmp(ARG[0], "GetArray")      && (argc >= 3)) {
             CMD.type   = CMD_GetArray;
-            CMD.var[0] = parse_bms_add_var(1);                  // var
-            CMD.var[1] = parse_bms_add_var(2);                  // array number
-            CMD.var[2] = parse_bms_add_var(3);                  // number/string
+            for(i = 1; i <= (argc - 2); i++) {
+                CMD.var[i-1] = parse_bms_add_var(i);            // var
+            }
+            CMD.var[i-1] = parse_bms_add_var(i);                // array number
+            i++;
+            CMD.var[i-1] = parse_bms_add_var(i);                // number/string
 
         } else if(!stricmp(ARG[0], "PutArray")      && (argc >= 3)) {
             CMD.type   = CMD_PutArray;
             CMD.var[0] = parse_bms_add_var(1);                  // array number
             CMD.var[1] = parse_bms_add_var(2);                  // number/string
-            CMD.var[2] = parse_bms_add_var(3);                  // var
+            for(i = 3; i <= argc; i++) {
+                CMD.var[i-1] = parse_bms_add_var(i);            // var
+            }
 
         } else if(!stricmp(ARG[0], "SortArray")      && (argc >= 1)) {
             CMD.type   = CMD_SortArray;
             CMD.var[0] = parse_bms_add_var(1);                  // array number
             if(argc >= 2) CMD.var[1] = parse_bms_add_var(2);    // all
+
+        } else if(!stricmp(ARG[0], "SearchArray")    && (argc >= 3)) {
+            CMD.type   = CMD_SearchArray;
+            CMD.var[0] = parse_bms_add_var(1);                  // var
+            CMD.var[1] = parse_bms_add_var(2);                  // array number
+            CMD.var[2] = parse_bms_add_var(3);                  // number/string
 
         } else if(!stricmp(ARG[0], "StartFunction") && (argc >= 1)) {
             CMD.type   = CMD_StartFunction;
@@ -2578,17 +2687,20 @@ redo:
             CMD.num[1] = 0;                                     // File
 
             cmd++;
+            check_g_command(cmd);
             CMD.type   = CMD_GoTo;
             CMD.var[0] = parse_bms_add_var(1);                  // pos
             CMD.num[1] = 0;                                     // file
             CMD.num[2] = SEEK_SET;
 
             cmd++;
+            check_g_command(cmd);
             CMD.type   = CMD_IDString;
             CMD.num[0] = 0;
             NUMS2BYTES_HEX(ARG[2], CMD.num[1], CMD.str[1], CMD.num[2], is_const[2])  // string (acts like a realloc)
 
             cmd++;
+            check_g_command(cmd);
             CMD.type   = CMD_GoTo;
             CMD.var[0] = add_var(0, QUICKBMS_DUMMY, NULL, 0, -2);   // pos
             CMD.num[1] = 0;                                     // file
@@ -2664,6 +2776,10 @@ redo:
             CMD.num[1] = myatoifile(ARG[2]);                    // file
             CMD.num[2] = SEEK_CUR;
 
+        } else if(!stricmp(ARG[0], "reimport") && (argc >= 0)) {
+            CMD.type   = CMD_Reimport;
+            if(argc >= 1) CMD.var[0] = parse_bms_add_var(1);    // type
+
         } else if(
             (   !stricmp(ARG[0], "ReadByte")   || !stricmp(ARG[0], "ReadDouble") || !stricmp(ARG[0], "ReadFloat")  ||
                 !stricmp(ARG[0], "ReadHFloat") || !stricmp(ARG[0], "ReadInt")    || !stricmp(ARG[0], "ReadInt64")  ||
@@ -2694,6 +2810,15 @@ redo:
 
         } else {
 
+            if(!g_c_structs_allowed) {
+                fprintf(stderr, "\nAlert: invalid command \"%s\" or arguments (%d), line %d\n", ARG[0], (i32)argc, (i32)g_bms_line_number);
+                fprintf(stderr, "The script may use other supported languages and C structs, continue? (y/N)\n  ");
+                if(get_yesno(NULL) != 'y') {
+                    myexit(QUICKBMS_ERROR_BMS);
+                }
+                g_c_structs_allowed = 1;
+            }
+
             if(c_structs_do) {
                 argc = c_structs(argument, argc, &cmd);
                 if(argc >= 0) {
@@ -2702,7 +2827,7 @@ redo:
                 }
             }
 
-            fprintf(stderr, "\nError: invalid command \"%s\" or arguments %d at line %d\n", ARG[0], (i32)argc, (i32)g_bms_line_number);
+            fprintf(stderr, "\nError: invalid command \"%s\" or arguments (%d), line %d\n", ARG[0], (i32)argc, (i32)g_bms_line_number);
             myexit(QUICKBMS_ERROR_BMS);
         }
 
@@ -2731,7 +2856,7 @@ redo:
             if(is_append) {
                 u8 *fname = VAR(0);
                 u8 *varname = VARNAME(0);
-                if(!strnicmp(varname, MEMORY_FNAME, MEMORY_FNAMESZ) && !stricmp(varname, fname)) {  // from file.c
+                if(is_MEMORY_FILE(varname) && !stricmp(varname, fname)) {  // from file.c
                     if(g_reimport) is_append_hashing_necessary = 1;    // or memory file reimporting will not work
                 } else {
                     is_append_hashing_necessary = 1;
@@ -2792,15 +2917,17 @@ void bms_init(int reinit) {
         g_temporary_file_used   = 0;
         g_mex_default           = 0;
         g_script_uses_append    = 0;
-        memset(&g_filexor,   0, sizeof(g_filexor));
-        memset(&g_filerot,   0, sizeof(g_filerot));
-        memset(&g_filecrypt, 0, sizeof(g_filecrypt));
+        memcpy(&g_filexor,   &g_filexor_reset, sizeof(filexor_t));  //memset(&g_filexor,   0, sizeof(g_filexor));
+        memcpy(&g_filerot,   &g_filexor_reset, sizeof(filexor_t));  //memset(&g_filerot,   0, sizeof(g_filerot));
+        memcpy(&g_filecrypt, &g_filexor_reset, sizeof(filexor_t));  //memset(&g_filecrypt, 0, sizeof(g_filecrypt));
         g_comtype_dictionary    = NULL;
         //EXTRCNT_idx             = 0;
         //BytesRead_idx           = 0;
         //NotEOF_idx              = 0;
         g_memfile_reimport_name     = -1;
         if(!g_ipc_web_api) g_replace_fdnum0 = 0;    // it's mandatory in web api, it may cause problems with some rare scripts
+        if(g_debug_output) g_debug_output->level = 0;
+        g_slog_id               = 0;
 
     if(g_mex_default) {
         g_mex_default_init(0);
@@ -2845,9 +2972,11 @@ void bms_init(int reinit) {
     memset(g_filenumber,  0, sizeof(g_filenumber));
     g_variable = g_variable_main;
     memset(g_variable,    0, sizeof(g_variable_main));
-    memset(g_command,     0, sizeof(g_command));
     memset(g_memory_file, 0, sizeof(g_memory_file));
     memset(g_array,       0, sizeof(g_array));
+
+    check_g_command(0);  // automatically checks !g_command
+    memset(g_command,     0, sizeof(command_t) * (MAX_CMDS + 1));
     for(i = 0; i < MAX_CMDS; i++) {
         for(j = 0; j < MAX_ARGS; j++) {
             g_command[i].var[j] = -0x7fffff;  // helps a bit to identify errors in QuickBMS, DO NOT MODIFY IT! NEVER! (it's used in places like check_condition)
@@ -2857,12 +2986,12 @@ void bms_init(int reinit) {
     }
 
     xgetcwd(g_current_folder, PATHSZ);
-    g_quickbms_version = calc_quickbms_version(VER);
+    g_quickbms_version = quickbmsver(VER);
 }
 
 
 
-int bms_finish(void) { // totally useless function, except in write mode for closing the files
+void bms_finish(void) { // totally useless function, except in write mode for closing the files
     int     i;
 
     for(i = 0; i < MAX_FILES; i++) {
@@ -2906,7 +3035,7 @@ int bms_finish(void) { // totally useless function, except in write mode for clo
             FREE(g_command[i].str[j])
         }
     }
-    memset(g_command, 0, sizeof(g_command));
+    memset(g_command,     0, sizeof(command_t) * (MAX_CMDS + 1));
 
     for(i = 0; i < MAX_FILES; i++) {
         FREE(g_memory_file[i].data)
@@ -2927,8 +3056,6 @@ int bms_finish(void) { // totally useless function, except in write mode for clo
 
     // xdbg_toggle() is not ready yet
     //xdbg_freeall();
-
-    return 0;
 }
 
 
@@ -2944,5 +3071,18 @@ void quickbms_statistics(time_t benchmark) {
         if(g_extracted_files == g_extracted_logs)   fprintf(stderr, "\n- %"PRId" files "             "found in %d seconds\n",      g_extracted_files,                     (i32)benchmark);
         else                                        fprintf(stderr, "\n- %"PRId" files (%"PRId" logs) found in %d seconds\n",      g_extracted_files,  g_extracted_logs,  (i32)benchmark);
     }
+}
+
+
+
+void quickbms_set_reimport_var(void) {
+    int     value = 0;
+    if(!g_reimport) value = 0;
+    else if(g_reimport > 0) value = 1;
+    else if(g_reimport < 0) {
+        value = 2;
+        if(g_reimport_shrink_enlarge) value = 3;
+    }
+    add_var(0, "QUICKBMS_REIMPORT", NULL, value, sizeof(int));
 }
 
