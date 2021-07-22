@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2018 Luigi Auriemma
+    Copyright 2009-2019 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -65,9 +65,9 @@
     #define BEA_USE_STDCALL
     #include <BeaEngine.h>
 #endif
-#include "capstone.h"
+#include "capstone/capstone.h"
 
-//typedef int8_t      i8;
+typedef int8_t      i8;
 typedef uint8_t     u8;
 //typedef int16_t     i16;
 typedef uint16_t    u16;
@@ -113,8 +113,13 @@ typedef unsigned short  word;   // for sflcomp
     #define stricmp     strcasecmp
     #define strnicmp    strncasecmp
     //#define stristr     strcasestr
+    typedef uint16_t    WORD;
     typedef uint32_t    DWORD;
 #endif
+#ifndef nullptr
+#define nullptr NULL
+#endif
+
 int (*real_strcmp) ( const char * str1, const char * str2 ) = strcmp;
 int (*real_stricmp) ( const char * str1, const char * str2 ) = stricmp;
 int (*real_strncmp) ( const char * str1, const char * str2, size_t num ) = strncmp;
@@ -274,6 +279,9 @@ void isaacx_crypt(unsigned char *key, int keylen, unsigned char *data, int datas
 void hsel_crypt(unsigned char *key, unsigned char *data, int size, int do_encrypt, char *options);
 void molebox_setkey(u8 *data, u8 *key);
 void molebox_decrypt(u8 *key, u8 *data, int datasz);
+extern void deskey(unsigned char *, short);
+extern void des(unsigned char *, unsigned char *);
+#include "encryption/chacha20_simple.h"
 
 #ifdef __DJGPP__
     #define NOLFS
@@ -341,6 +349,7 @@ void molebox_decrypt(u8 *key, u8 *data, int datasz);
         #define fopen   fopen64
         #define fseek   fseeko64
         #define ftell   ftello64
+        #define ftruncate   ftruncate64
         #ifndef fstat
             #ifdef WIN32
                 #define fstat   _fstati64
@@ -433,6 +442,7 @@ static void FCLOSEX(FILE *X) { if(X && (X != stdout) && (X != stderr) && (X != s
                         }
 // the first 2 checks on fdnum are not necessary
 #define fdnum_is_valid  ((fdnum >= 0) && (fdnum < MAX_FILES))
+#define CHECK_MEMNUM(X) if(((-fdnum) > MAX_FILES) || ((-fdnum) < 0)) return X;
 #define CHECK_FILENUMX  if( \
                             (fdnum < 0) \
                          || (fdnum > MAX_FILES) \
@@ -464,7 +474,7 @@ static void FCLOSEX(FILE *X) { if(X && (X != stdout) && (X != stderr) && (X != s
 #define QUICK_PUTi32(X,Y)   (X)[0]=(Y);      (X)[1]= (Y)>> 8;    (X)[2]= (Y)>>16;     (X)[3]= (Y)>> 24;
 #define QUICK_PUTb32(X,Y)   (X)[3]=(Y);      (X)[2]= (Y)>> 8;    (X)[1]= (Y)>>16;     (X)[0]= (Y)>> 24;
 #define SCAN_INPUT_FILE_PATH(OUT_BUFF, IN_NAME) \
-            switch(i) { \
+            switch(path_idx) { \
                 case 0:  mypath = g_bms_folder;     break; \
                 case 1:  mypath = g_exe_folder;     break; \
                 case 2:  mypath = g_file_folder;    break; \
@@ -515,8 +525,8 @@ re_strdup uses the same work-around too.
 
 
 
-u8 *myitoa(QUICKBMS_int num);
-files_t *add_files(u8 *fname, QUICKBMS_int fsize, QUICKBMS_int *ret_files);
+u8 *myitoa(int num);
+files_t *add_files(u8 *fname, u64 fsize, QUICKBMS_int *ret_files);
 int debug_privileges(void);
 int verbose_options(u8 *arg);
 u8 *mystrdup_simple(u8 *str);
@@ -524,7 +534,7 @@ u8 *mystrdup(u8 **old_buff, u8 *str);
 u8 *show_dump(int left, u8 *data, int len, FILE *stream);
 int get_parameter_numbers_int(u8 *str, ...);
 int get_parameter_numbers_i32(u8 *str, ...);
-QUICKBMS_int readbase(u8 *data, QUICKBMS_int size, QUICKBMS_int *readn);
+u64 readbase(u8 *data, QUICKBMS_int size, QUICKBMS_int *readn);
 void g_mex_default_init(int file_only);
 int start_bms(int startcmd, int nop, int this_is_a_cycle, int *invoked_if, int *invoked_break, int *invoked_continue, u8 **invoked_label);
 int check_wildcard(u8 *fname, u8 *wildcard);
@@ -902,6 +912,10 @@ i32 main(i32 argc, char *argv[]) {
             case 'O': i++;  break;
             case 'M': i++;  break;
             case 'P': i++;  break;
+            case 'W': i++;  break;
+            case 't': i++;  break;
+            case 'b': i++;  break;
+
             //
             case 'G': g_is_gui = !g_is_gui; break;
             case '9': xdbg_toggle(); break; // it's just: XDBG_ALLOC_ACTIVE = !XDBG_ALLOC_ACTIVE
@@ -960,7 +974,7 @@ i32 main(i32 argc, char *argv[]) {
         "web:    aluigi.org\n"
         "        (" __DATE__ " - " __TIME__ ")\n"
         "\n"
-        "                   quickbms.aluigi.org  Homepage\n"
+        "                          quickbms.com  Homepage\n"
         "                            zenhax.com  ZenHAX Forum\n"
         "                     @zenhax @quickbms  Twitter & Scripts\n"
         //"                       @luigi_auriemma  aluigi Twitter\n"
@@ -1133,8 +1147,9 @@ i32 main(i32 argc, char *argv[]) {
             case 'E': g_endian_killer           = 1;                            break;
             case '0': g_void_dump               = 1;                            break;
             case 'r':
-                if(!g_reimport) g_reimport = 1;
-                else if(g_reimport > 0) g_reimport = -1;
+                if(!g_reimport) g_reimport = 1;                                 // -r
+                else if(g_reimport > 0) g_reimport = -1;                        // -r -r
+                else g_reimport_shrink_enlarge = 1;                             // -r -r -r
                 break;
             case 'n': enable_sockets            = 1;                            break;
             case 'p': enable_process            = 1;                            break;
@@ -1174,7 +1189,7 @@ i32 main(i32 argc, char *argv[]) {
             case 'Z': g_reimport_zero           = 1;                            break;
             case 'P':
                 i++;
-                set_g_codepage(argv[i], atoi(argv[i]));
+                set_g_codepage(argv[i], myatoi(argv[i]));
                 g_codepage_default = g_codepage;
                 break;
             case 'T': g_keep_temporary_file     = 1;                            break;
@@ -1186,6 +1201,11 @@ i32 main(i32 argc, char *argv[]) {
             case 't': g_extracted_file_tree_view_mode = atoi(argv[++i]);        break;
             case 'U': quickbms_comp_print(NULL); myexit(QUICKBMS_OK);           break;
             case '#': g_extraction_hash         = 1;                            break;
+            case 'j': g_force_utf16             = -1;                           break;
+            case 'b':
+                i++;
+                g_log_filler_char   = (strlen(argv[i]) == 1) ? argv[i][0] : myatoi(argv[i]);
+                break;
             // remember to add the options with arguments to the above list
             default: {
                 fprintf(stderr, "\nError: wrong command-line argument (%s)\n", argv[i]);
@@ -1212,6 +1232,7 @@ i32 main(i32 argc, char *argv[]) {
         fprintf(stderr, "\n");
         if(g_reimport < 0) fprintf(stderr, "- alternative REIMPORT2 mode enabled!\n");
         else               fprintf(stderr, "- REIMPORT mode enabled!\n");
+        if(g_reimport_shrink_enlarge) fprintf(stderr, "- automatic file resizing mode enabled!\n");
         fprintf(stderr, "  - remember to select the SAME script, file and folder you selected during\n"
                         "    the previous extraction\n");
         fprintf(stderr, "  - it's highly suggested to leave only the edited files in the folder, it's\n"
@@ -1272,10 +1293,10 @@ i32 main(i32 argc, char *argv[]) {
 
     // fix and build filters
 
-    g_filter_files    = build_filter(filter_files_tmp);
+    build_filter(&g_filter_files,    filter_files_tmp);
     FREE(filter_files_tmp)
 
-    g_filter_in_files = build_filter(filter_in_files_tmp);
+    build_filter(&g_filter_in_files, filter_in_files_tmp);
     FREE(filter_in_files_tmp)
 
     g_temp_folder[0] = 0;
@@ -1365,7 +1386,7 @@ i32 main(i32 argc, char *argv[]) {
     } else
 #endif
 
-    if(check_is_dir(fname)) {
+    if(fname[0] && check_is_dir(fname)) {   // fname[0] is necessary or 'quickbms script.bms ""' will fail
         mystrcpy(g_file_folder, fname, PATHSZ);
         newdir = fname;
         fprintf(stderr, "- start the scanning of the input folder: %s\n", newdir);
@@ -1457,7 +1478,7 @@ redo:
             // nothing to do
         } else if(!strcmp(bms, "-")) {
             // using fds stdin will not work for multiple files
-            if(!post_script) post_script = incremental_fread(stdin, &post_script_size, 1, NULL, 0);;
+            if(!post_script) post_script = incremental_fread(stdin, &post_script_size, 1, NULL, 0, 0);
         } else if(bms[0] && strchr("?"/*:|<>"*/, bms[strlen(bms)-1])) { // invalid chars at the end of the file, only way due to get_file ("c:\\?" instead of "?")
             if(!post_script) post_script = get_clipboard(&post_script_size, 1);
         } else {

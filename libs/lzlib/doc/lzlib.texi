@@ -6,8 +6,8 @@
 @finalout
 @c %**end of header
 
-@set UPDATED 13 December 2017
-@set VERSION 1.10-rc1
+@set UPDATED 2 January 2019
+@set VERSION 1.11
 
 @dircategory Data Compression
 @direntry
@@ -51,7 +51,7 @@ This manual is for Lzlib (version @value{VERSION}, @value{UPDATED}).
 @end menu
 
 @sp 1
-Copyright @copyright{} 2009-2017 Antonio Diaz Diaz.
+Copyright @copyright{} 2009-2019 Antonio Diaz Diaz.
 
 This manual is free documentation: you have unlimited permission
 to copy, distribute and modify it.
@@ -61,14 +61,13 @@ to copy, distribute and modify it.
 @chapter Introduction
 @cindex introduction
 
-Lzlib is a data compression library providing in-memory LZMA compression
-and decompression functions, including integrity checking of the
-decompressed data. The compressed data format used by the library is the
-lzip format. Lzlib is written in C.
+@uref{http://www.nongnu.org/lzip/lzlib.html,,Lzlib} is a data compression
+library providing in-memory LZMA compression and decompression functions,
+including integrity checking of the decompressed data. The compressed data
+format used by the library is the lzip format. Lzlib is written in C.
 
-The lzip file format is designed for data sharing and long-term
-archiving, taking into account both data integrity and decoder
-availability:
+The lzip file format is designed for data sharing and long-term archiving,
+taking into account both data integrity and decoder availability:
 
 @itemize @bullet
 @item
@@ -118,14 +117,19 @@ data to be compressed in advance, just call the read function with a
 
 If all the data to be compressed are written in advance, lzlib will
 automatically adjust the header of the compressed data to use the
-smallest possible dictionary size. This feature reduces the amount of
-memory needed for decompression and allows minilzip to produce identical
-compressed output as lzip.
+largest dictionary size that does not exceed neither the data size nor
+the limit given to @samp{LZ_compress_open}. This feature reduces the
+amount of memory needed for decompression and allows minilzip to produce
+identical compressed output as lzip.
 
 Lzlib will correctly decompress a data stream which is the concatenation
 of two or more compressed data streams. The result is the concatenation
 of the corresponding decompressed data streams. Integrity testing of
 concatenated compressed data streams is also supported.
+
+Lzlib is able to compress and decompress streams of unlimited size by
+automatically creating multimember output. The members so created are
+large, about @w{2 PiB} each.
 
 All the library functions are thread safe. The library does not install
 any signal handler. The decoder checks the consistency of the compressed
@@ -286,11 +290,13 @@ fast variant of LZMA is chosen, which produces identical compressed
 output as @code{lzip -0}. (The dictionary size used will be rounded
 upwards to @w{64 KiB}).
 
-@var{member_size} sets the member size limit in bytes. Minimum member
-size limit is @w{100 kB}. Small member size may degrade compression
-ratio, so use it only when needed. To produce a single-member data
-stream, give @var{member_size} a value larger than the amount of data to
-be produced, for example INT64_MAX.
+@var{member_size} sets the member size limit in bytes. Valid values
+range from @w{100 kB} to @w{2 PiB}. Small member size may degrade
+compression ratio, so use it only when needed. To produce a
+single-member data stream, give @var{member_size} a value larger than
+the amount of data to be produced. Values larger than @w{2 PiB} will be
+reduced to @w{2 PiB} to prevent the uncompressed size of the member from
+overflowing.
 @end deftypefun
 
 
@@ -305,6 +311,7 @@ longer be used as an argument to any LZ_compress function.
 @deftypefun int LZ_compress_finish ( struct LZ_Encoder * const @var{encoder} )
 Use this function to tell @samp{lzlib} that all the data for this member
 have already been written (with the @samp{LZ_compress_write} function).
+It is safe to call @samp{LZ_compress_finish} as many times as needed.
 After all the produced compressed data have been read with
 @samp{LZ_compress_read} and @samp{LZ_compress_member_finished} returns
 1, a new member can be started with @samp{LZ_compress_restart_member}.
@@ -364,13 +371,14 @@ accept a @var{size} up to the returned number of bytes.
 
 
 @deftypefun {enum LZ_Errno} LZ_compress_errno ( struct LZ_Encoder * const @var{encoder} )
-Returns the current error code for @var{encoder} (@pxref{Error codes}).
+Returns the current error code for @var{encoder}. @xref{Error codes}.
 @end deftypefun
 
 
 @deftypefun int LZ_compress_finished ( struct LZ_Encoder * const @var{encoder} )
 Returns 1 if all the data have been read and @samp{LZ_compress_close}
-can be safely called. Otherwise it returns 0.
+can be safely called. Otherwise it returns 0. @samp{LZ_compress_finished}
+implies @samp{LZ_compress_member_finished}.
 @end deftypefun
 
 
@@ -439,6 +447,7 @@ longer be used as an argument to any LZ_decompress function.
 @deftypefun int LZ_decompress_finish ( struct LZ_Decoder * const @var{decoder} )
 Use this function to tell @samp{lzlib} that all the data for this stream
 have already been written (with the @samp{LZ_decompress_write} function).
+It is safe to call @samp{LZ_decompress_finish} as many times as needed.
 @end deftypefun
 
 
@@ -473,6 +482,16 @@ less than @var{size}; for example, if there aren't that many bytes left
 in the stream or if more bytes have to be yet written with the
 @samp{LZ_decompress_write} function. Note that reading less than
 @var{size} bytes is not an error.
+
+In case of decompression error caused by corrupt or truncated data,
+@samp{LZ_decompress_read} does not signal the error immediately to the
+application, but waits until all decoded bytes have been read. This
+allows tools like
+@uref{http://www.nongnu.org/lzip/manual/tarlz_manual.html,,tarlz} to
+recover as much data as possible from each damaged member.
+@ifnothtml
+@xref{Top,tarlz manual,,tarlz}.
+@end ifnothtml
 @end deftypefun
 
 
@@ -497,7 +516,7 @@ will accept a @var{size} up to the returned number of bytes.
 
 
 @deftypefun {enum LZ_Errno} LZ_decompress_errno ( struct LZ_Decoder * const @var{decoder} )
-Returns the current error code for @var{decoder} (@pxref{Error codes}).
+Returns the current error code for @var{decoder}. @xref{Error codes}.
 @end deftypefun
 
 
@@ -615,7 +634,7 @@ used to remove conflicting trailing data from a file.
 @end deftypevr
 
 @deftypevr Constant {enum LZ_Errno} LZ_library_error
-A bug was detected in the library. Please, report it (@pxref{Problems}).
+A bug was detected in the library. Please, report it. @xref{Problems}.
 @end deftypevr
 
 
@@ -639,6 +658,10 @@ The value of @var{lz_errno} normally comes from a call to
 @cindex invoking
 @cindex options
 
+Minilzip is a test program for the lzlib compression library, fully
+compatible with lzip 1.4 or newer.
+
+@noindent
 The format for running minilzip is:
 
 @example
@@ -660,6 +683,7 @@ Print an informative help message describing the options and exit.
 @item -V
 @itemx --version
 Print the version number of minilzip on the standard output and exit.
+This version number should be included in all bug reports.
 
 @anchor{--trailing-error}
 @item -a
@@ -727,12 +751,13 @@ Quiet operation. Suppress all messages.
 @item -s @var{bytes}
 @itemx --dictionary-size=@var{bytes}
 When compressing, set the dictionary size limit in bytes. Minilzip will use
-the smallest possible dictionary size for each file without exceeding
-this limit. Valid values range from @w{4 KiB} to @w{512 MiB}. Values 12
-to 29 are interpreted as powers of two, meaning 2^12 to 2^29 bytes. Note
-that dictionary sizes are quantized. If the specified size does not
-match one of the valid sizes, it will be rounded upwards by adding up to
-@w{(@var{bytes} / 8)} to it.
+for each file the largest dictionary size that does not exceed neither
+the file size nor this limit. Valid values range from @w{4 KiB} to
+@w{512 MiB}. Values 12 to 29 are interpreted as powers of two, meaning
+2^12 to 2^29 bytes. Dictionary sizes are quantized so that they can be
+coded in just one byte (@pxref{coded-dict-size}). If the specified size
+does not match one of the valid sizes, it will be rounded upwards by
+adding up to @w{(@var{bytes} / 8)} to it.
 
 For maximum compression you should use a dictionary size limit as large
 as possible, but keep in mind that the decompression memory requirement
@@ -767,18 +792,23 @@ verbosity level, showing status, compression ratio, dictionary size,
 and trailer contents (CRC, data size, member size).
 
 @item -0 .. -9
-Set the compression parameters (dictionary size and match length limit)
-as shown in the table below. The default compression level is @samp{-6}.
-Note that @samp{-9} can be much slower than @samp{-0}. These options
-have no effect when decompressing or testing.
+Compression level. Set the compression parameters (dictionary size and
+match length limit) as shown in the table below. The default compression
+level is @samp{-6}, equivalent to @w{@samp{-s8MiB -m36}}. Note that
+@samp{-9} can be much slower than @samp{-0}. These options have no
+effect when decompressing or testing.
 
 The bidimensional parameter space of LZMA can't be mapped to a linear
 scale optimal for all files. If your files are large, very repetitive,
 etc, you may need to use the @samp{--dictionary-size} and
 @samp{--match-length} options directly to achieve optimal performance.
 
-@multitable {Level} {Dictionary size} {Match length limit}
-@item Level @tab Dictionary size @tab Match length limit
+If several compression levels or @samp{-s} or @samp{-m} options are
+given, the last setting is used. For example @w{@samp{-9 -s64MiB}} is
+equivalent to @w{@samp{-s64MiB -m273}}
+
+@multitable {Level} {Dictionary size (-s)} {Match length limit (-m)}
+@item Level @tab Dictionary size (-s) @tab Match length limit (-m)
 @item -0 @tab 64 KiB @tab  16 bytes
 @item -1 @tab  1 MiB @tab   5 bytes
 @item -2 @tab  1.5 MiB @tab   6 bytes
@@ -874,12 +904,13 @@ A four byte string, identifying the lzip format, with the value "LZIP"
 @item VN (version number, 1 byte)
 Just in case something needs to be modified in the future. 1 for now.
 
+@anchor{coded-dict-size}
 @item DS (coded dictionary size, 1 byte)
 The dictionary size is calculated by taking a power of 2 (the base size)
-and substracting from it a fraction between 0/16 and 7/16 of the base
+and subtracting from it a fraction between 0/16 and 7/16 of the base
 size.@*
 Bits 4-0 contain the base 2 logarithm of the base size (12 to 29).@*
-Bits 7-5 contain the numerator of the fraction (0 to 7) to substract
+Bits 7-5 contain the numerator of the fraction (0 to 7) to subtract
 from the base size to obtain the dictionary size.@*
 Example: 0xD3 = 2^19 - 6 * 2^15 = 512 KiB - 6 * 32 KiB = 320 KiB@*
 Valid values for dictionary size range from 4 KiB to 512 MiB.
@@ -933,12 +964,10 @@ Example 1: Normal compression (@var{member_size} > total output).
 @example
 1) LZ_compress_open
 2) LZ_compress_write
-3) LZ_compress_read
-4) go back to step 2 until all input data have been written
-5) LZ_compress_finish
-6) LZ_compress_read
-7) go back to step 6 until LZ_compress_finished returns 1
-8) LZ_compress_close
+3) if no more data to write, call LZ_compress_finish
+4) LZ_compress_read
+5) go back to step 2 until LZ_compress_finished returns 1
+6) LZ_compress_close
 @end example
 
 @sp 1
@@ -962,12 +991,10 @@ Example 3: Decompression.
 @example
 1) LZ_decompress_open
 2) LZ_decompress_write
-3) LZ_decompress_read
-4) go back to step 2 until all input data have been written
-5) LZ_decompress_finish
-6) LZ_decompress_read
-7) go back to step 6 until LZ_decompress_finished returns 1
-8) LZ_decompress_close
+3) if no more data to write, call LZ_decompress_finish
+4) LZ_decompress_read
+5) go back to step 2 until LZ_decompress_finished returns 1
+6) LZ_decompress_close
 @end example
 
 @sp 1
@@ -1008,15 +1035,15 @@ Example 5: Multimember compression (@var{member_size} < total output).
 Example 6: Multimember compression (user-restarted members).
 
 @example
- 1) LZ_compress_open
+ 1) LZ_compress_open       (with @var{member_size} > largest member).
  2) LZ_compress_write
  3) LZ_compress_read
  4) go back to step 2 until member termination is desired
  5) LZ_compress_finish
  6) LZ_compress_read
  7) go back to step 6 until LZ_compress_member_finished returns 1
- 8) verify that LZ_compress_finished returns 1
- 9) go to step 12 if all input data have been written
+ 9) go to step 12 if all input data have been written and
+    LZ_compress_finished returns 1
 10) LZ_compress_restart_member
 11) go back to step 2
 12) LZ_compress_close

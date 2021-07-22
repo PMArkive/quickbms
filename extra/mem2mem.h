@@ -3,7 +3,7 @@
 #ifndef MEM2MEM_H
 #define MEM2MEM_H
 
-#define mem2mem_FILE    (void *)0xdeadc0de
+#define mem2mem_FILE    ((void *)-0x80000000)
 
 #define fgetc   mem2mem_fgetc
 #define fputc   mem2mem_fputc

@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2018 Luigi Auriemma
+    Copyright 2009-2019 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -166,7 +166,7 @@ u8 *show_dump(int left, u8 *data, int len, FILE *stream) {
         for(rem = left; rem >= sizeof(leftbuff); rem -= sizeof(leftbuff)) {
             show_dump_stream(leftbuff, sizeof(leftbuff))
         }
-        if(rem > 0) fwrite(leftbuff, rem, 1, stream);
+        if(rem > 0) show_dump_stream(leftbuff, rem)
         show_dump_stream(buff, (bytes - buff))
     }
 
@@ -185,6 +185,7 @@ void show_hex_chr(unsigned char chr) {
 
 void show_hex(u8 *data, int size) {
     int     i;
+    if(!data) return;
     for(i = 0; i < size; i++) {
         show_hex_chr(data[i]);
     }
@@ -415,6 +416,38 @@ UINT_PTR CALLBACK OFN_DUMMY_HOOK(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lP
     return 0;
 }
 
+// the following is totally useless since it's unused, file opening happens before arguments parsing
+void *build_lpstrFilter(void) {
+    static void *ret    = NULL;
+
+    if(!g_filter_in_files) return NULL;
+
+    int     i,
+            ret_len = 0;
+
+    char    *f;
+    for(i = 0; (f = g_filter_in_files[i]); i++) {
+        ret_len += 1 + strlen(f) + 1 + 1;   // visible filter
+        ret_len += strlen(f) + 1;           // real filter
+    }
+    ret_len++;
+    ret_len++;
+
+    ret_len *= sizeof(wchar_t);
+    ret = realloc(ret, ret_len + sizeof(wchar_t));
+
+    wchar_t *fW = ret;
+    for(i = 0; (f = g_filter_in_files[i]); i++) {
+        myswprintf(fW, (ret_len - ((void *)fW - (void *)ret)) / sizeof(wchar_t), L"(%s)", native_utf8_to_unicode(f));
+        fW += wcslen(fW) + 1;   // correct
+        myswprintf(fW, (ret_len - ((void *)fW - (void *)ret)) / sizeof(wchar_t), L"%s",   native_utf8_to_unicode(f));
+        fW += wcslen(fW) + 1;   // correct
+    }
+    *fW++ = 0;
+    *fW++ = 0;
+    return ret;
+}
+
     // Windows 8.1 has a bug that crashes quickbms if there is no hook,
     // here I use dwMinorVersion >= 2 because GetVersionEx reports 2 for
     // both 8 (which is safe) and 8.1.
@@ -457,6 +490,8 @@ char *get_file(char *title, i32 bms, i32 multi) {
             "(*.*)\0"       "*.*\0" \
             "\0"            "\0"; \
     } else { \
+        ofn##W.lpstrFilter = build_lpstrFilter(); \
+        if(!ofn##W.lpstrFilter) \
         ofn##W.lpstrFilter = \
             L## \
             "(*.*)\0"       "*.*\0" \
@@ -623,6 +658,7 @@ int fgetz(u8 *data, int datalen, FILE *fd, u8 *fmt, ...) {
 
     if(datalen <= 0) return -1;
     if(!data) data = alloca(datalen + 1);   // stack
+    if(!data) return -1;
     if(fmt) {
         va_start(ap, fmt);
         vprintf(fmt, ap);
@@ -638,7 +674,7 @@ int fgetz(u8 *data, int datalen, FILE *fd, u8 *fmt, ...) {
 
 
 
-QUICKBMS_int readbase(u8 *data, QUICKBMS_int size, QUICKBMS_int *readn) {
+u64 readbase(u8 *data, QUICKBMS_int size, QUICKBMS_int *readn) {
     static const u8 table[256] =    // fast performances
             "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
             "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
@@ -656,7 +692,7 @@ QUICKBMS_int readbase(u8 *data, QUICKBMS_int size, QUICKBMS_int *readn) {
             "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
             "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
             "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff";
-    int     num     = 0;
+    u64     num     = 0;
     int     sign;
     u8      c,
             *s,
@@ -1087,6 +1123,7 @@ int find_replace_string(u8 **mybuf, int *buflen, u8 *old, int oldlen, u8 *news, 
         oldlen = 0;
         if(old) oldlen = strlen(old);
     }
+    if(oldlen <= 0) return ret;
     tlen    = len - oldlen;
     //len_bck = len;
 
@@ -1236,7 +1273,7 @@ quit:
 
 
 // use real_* for improving speed avoiding the xalloc stuff
-files_t *add_files(u8 *fname, int fsize, int *ret_files) {
+files_t *add_files(u8 *fname, u64 fsize, int *ret_files) {
     static int      filesi  = 0,
                     filesn  = 0;
     static files_t  *files  = NULL;
@@ -1432,7 +1469,7 @@ int recursive_dir(u8 *filedir, int filedirsz) {
         if(wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             recursive_dir(filedir, filedirsz);  // NO goto quit
         } else {
-            add_files(filedir + recursive_dir_skip_path, wfd.nFileSizeLow, NULL);
+            add_files(filedir + recursive_dir_skip_path, ((u64)wfd.nFileSizeHigh << (u64)(sizeof(wfd.nFileSizeLow) * 8)) | (u64)wfd.nFileSizeLow, NULL);
         }
     } while(FindNextFile(hFind, &wfd));
     ret = 0;
@@ -1498,9 +1535,40 @@ typedef struct {
     u8  *limit;
 } datafile_t;
 
+int incremental_fread_getc(FILE *fd, datafile_t *df, u8 *data, int utf16) {
+    int     t   = 0;
+
+    if(fd) {
+        if(utf16 < 0) {
+            t = fgetc(fd)        | (fgetc(fd) << 8);
+        } else if(utf16 > 0) {
+            t = (fgetc(fd) << 8) | fgetc(fd);
+        } else {
+            t = fgetc(fd);
+        }
+    } else if(data) {
+        if(utf16 < 0) {
+            t = data[0]        | (data[1] << 8);
+        } else if(utf16 > 0) {
+            t = (data[0] << 8) | data[1];
+        } else {
+            t = data[0];
+        }
+    } else if(df->p < df->limit) {
+        if(utf16 < 0) {
+            t = df->p[0]        | (df->p[1] << 8);
+        } else if(utf16 > 0) {
+            t = (df->p[0] << 8) | df->p[1];
+        } else {
+            t = df->p[0];
+        }
+    }
+    return t;
+}
+
 // remember that the output is allocated and not static, free it when you no longer need it
 // eol: 0=just_fread, 1=line, -1
-u8 *incremental_fread(FILE *fd, int *ret_size, int eol, datafile_t *df, int use_static) {
+u8 *incremental_fread(FILE *fd, int *ret_size, int eol, datafile_t *df, int use_static, int utf16) {
     static const int    STDINSZ = 4096;
     static int  _buffsz = 0;
     static u8   *_buff  = NULL;
@@ -1508,7 +1576,8 @@ u8 *incremental_fread(FILE *fd, int *ret_size, int eol, datafile_t *df, int use_
             len,
             size,
             buffsz  = 0;
-    u8      *buff   = NULL;
+    u8      bom[3]  = "",
+            *buff   = NULL;
 
     if(use_static) {
         buff    = _buff;
@@ -1523,15 +1592,35 @@ u8 *incremental_fread(FILE *fd, int *ret_size, int eol, datafile_t *df, int use_
             for(scan = 0; scan < 3; scan++) {
                 for(ok = 1; ok;) {
                     if(fd) {
-                        if(fseek(fd, -1, SEEK_CUR) < 0) ok = 0;
+                        if(!ftell(fd)) {
+                            fread(bom, 1, 3, fd);
+                            if(!memcmp(bom, "\xef\xbb\xbf", 3)) {       // UTF-8 BOM
+                                fseek(fd, 3, SEEK_SET);
+                                utf16 = 0;
+                            } else if(!memcmp(bom, "\xff\xfe", 2)) {    // UTF-16 BOM LE
+                                fseek(fd, 2, SEEK_SET);
+                                utf16 = -1;
+                            } else if(!memcmp(bom, "\xfe\xff", 2)) {    // UTF-16 BOM BE
+                                fseek(fd, 2, SEEK_SET);
+                                utf16 = 1;
+                            } else {
+                                fseek(fd, 0, SEEK_SET);
+                                utf16 = 0;
+                            }
+                        }
+                        if(fseek(fd, utf16 ? -2 : -1, SEEK_CUR) < 0) ok = 0;
                     } else if(df) {
-                        if(df->p == df->datafile) ok = 0;
-                        if(df->p > df->datafile) df->p -= 1;
+                        if(df->p <= df->datafile) ok = 0;
+                        if(df->p > df->datafile) df->p -= (utf16 ? 2 : 1);
                     }
 
                     t = 0;
-                    if(fd) { t = fgetc(fd); fseek(fd, -1, SEEK_CUR); }
-                    else if(df->p < df->limit) t = df->p[0];
+                    if(fd) {
+                        t = incremental_fread_getc(fd, df, NULL, utf16);
+                        fseek(fd, utf16 ? -2 : -1, SEEK_CUR);
+                    } else if(df->p < df->limit) {
+                        t = incremental_fread_getc(fd, df, NULL, utf16);
+                    }
 
                     t = (t == '\r') || (t == '\n'); // is a line feed
                            if(scan == 0) {
@@ -1544,8 +1633,12 @@ u8 *incremental_fread(FILE *fd, int *ret_size, int eol, datafile_t *df, int use_
                 }
             }
             if(ok) {
-                        if(fd) fgetc(fd); // '\n'?
-                        else if(df && (df->p < df->limit)) df->p++;
+                        if(fd) {
+                            fgetc(fd); // '\n'?
+                            if(utf16) fgetc(fd);    // LE or BE doesn't matter
+                        } else if(df && (df->p < df->limit)) {
+                            df->p += (utf16 ? 2 : 1);
+                        }
             }
         }
         eol = 1;
@@ -1559,7 +1652,7 @@ u8 *incremental_fread(FILE *fd, int *ret_size, int eol, datafile_t *df, int use_
                 buff = (u8 *)realloc(buff, buffsz + 1);
                 if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
             }
-            if(eol) len = 1;
+            if(eol) len = utf16 ? 2 : 1;
             else    len = buffsz - size;
             if(fd) {
                 len = fread(buff + size, 1, len, fd);
@@ -1579,22 +1672,26 @@ u8 *incremental_fread(FILE *fd, int *ret_size, int eol, datafile_t *df, int use_
             }
             size += len;
             if(eol) {
-                //if((buff[size - len] == '\r') || (buff[size - len] == '\n')) {    // old
-                if(buff[size - len] == '\r') {
-                    if(len == 1) {
+                t = incremental_fread_getc(NULL, NULL, buff + size - len, utf16);
+                //if((t == '\r') || (t == '\n')) {    // old
+                if(t == '\r') {
+                    if(len == (utf16 ? 2 : 1)) {
                         // '\n'?
                         if(fd) {
-                            t = fgetc(fd);
-                            if(t != '\n') ungetc(t, fd);
+                            t = incremental_fread_getc(fd, df, NULL, utf16);
+                            if(t != '\n') {
+                                ungetc(t, fd);
+                                if(utf16) ungetc(t, fd);
+                            }
                         } else if(df && (df->p < df->limit)) {
-                            t = *df->p;
-                            if(t == '\n') df->p++;
+                            t = incremental_fread_getc(fd, df, NULL, utf16);
+                            if(t == '\n') df->p += (utf16 ? 2 : 1);
                         }
                     }
                     size -= len;
                     break;
                 }
-                if(buff[size - len] == '\n') {
+                if(t == '\n') {
                     size -= len;
                     break;
                 }
@@ -1607,12 +1704,43 @@ u8 *incremental_fread(FILE *fd, int *ret_size, int eol, datafile_t *df, int use_
     }
     if(buff) buff[size] = 0;
 quit:
+    if(utf16) {
+        int endian_bck = g_endian;
+        g_endian = (utf16 < 0) ? MYLITTLE_ENDIAN : MYBIG_ENDIAN;
+        u8  *o8 = set_unicode_to_utf8(buff, size, &size);   // static
+        g_endian = endian_bck;
+        size++;   // NUL delimiter
+        if(size > buffsz) {
+            buffsz = size + STDINSZ;
+            buff = (u8 *)realloc(buff, buffsz + 1);
+            if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        }
+        memcpy(buff, o8, size);
+    }
+
     if(ret_size) *ret_size = size;
     if(use_static) {
         if(buff) _buff = buff;  // in case of errors
         _buffsz = buffsz;
     }
     return buff;
+}
+
+
+
+void pathslash_fix(u8 *fname, int cut_start) {
+    u8      *p;
+    if(fname) {
+        if(cut_start) {
+            for(p = fname; *p; p++) {
+                if(!strchr(PATH_DELIMITERS, *p)) break;
+            }
+            if(p != fname) mymemmove(fname, p, -1);
+        }
+        for(p = fname; *p; p++) {
+            if(strchr(PATH_DELIMITERS, *p)) *p = PATHSLASH;
+        }
+    }
 }
 
 
@@ -1846,6 +1974,17 @@ FILE *xfopen(u8 *fname, u8 *mode) {
     // do NOT enable "ccs=UTF-8" or everything will be screwed on Wine or some languages
     // unfortunately I can't remember why it was so important to use ccs and in what situations, but there are no other solutions
     myswprintf(wmode, sizeof(wmode) / sizeof(wchar_t), L"%s" /*", ccs=UTF-8"*/, native_utf8_to_unicode(mode));
+
+    // I have a report about this issue but can't verify it, very rare and affecting only some OS and/or filesystems I guess
+    if((strlen(fname) > 2) && (strstr(fname + 2, "\\\\") || strstr(fname + 2, "//"))) {
+        int     i, j;
+        for(i = j = 0; fname[i]; i++, j++) {
+            while(strchr(PATH_DELIMITERS, fname[i]) && strchr(PATH_DELIMITERS, fname[i + 1])) i++;
+            fname[j] = fname[i];
+        }
+        fname[j] = 0;
+    }
+
     fd = _wfopen(native_utf8_to_unicode(long_name_support(fname)), wmode);
     if(!fd) fd = _wfopen(native_utf8_to_unicode(fname), wmode); // try without long name support
 #endif
@@ -1869,7 +2008,7 @@ u8 *fdload(u8 *fname, int *fsize) {
     if(!fname) return NULL;
     fprintf(stderr, "  %s\n", fname);
     if(!strcmp(fname, "-")) {
-        return(incremental_fread(stdin, fsize, 0, NULL, 0));
+        return(incremental_fread(stdin, fsize, 0, NULL, 0, 0));
     }
     fd = xfopen(fname, "rb");
     if(!fd) return NULL;
@@ -2452,7 +2591,7 @@ void myexit(int ret) {
                 "Note that if both the scripts and your files are correct then it's possible\n"
                 "that the script needs a newer version of QuickBMS, in which case download it:\n"
                 "\n"
-                "  http://quickbms.aluigi.org\n"
+                "  http://quickbms.com\n"
                 "\n");
         }
 
@@ -2808,14 +2947,14 @@ u8 *get_fullpath_from_name(u8 *fname, int folder_only) {
 
 
 // necessary to avoid that Windows handles the format... even if delimited by quotes
-u8 **build_filter(u8 *filter) {
+u8 **build_filter(u8 ***ret_filter, u8 *filter) {
     int     i,
             len,
             ret_n;
     u8      *tmp_filter,
             *p,
             *l,
-            **ret   = NULL;
+            **ret       = NULL;
 
     if(!filter || !filter[0]) return NULL;
 
@@ -2823,7 +2962,11 @@ u8 **build_filter(u8 *filter) {
     tmp_filter = fdload(filter, &len);
     if(!tmp_filter) tmp_filter = mystrdup_simple(filter);
 
+    if(ret_filter) ret = *ret_filter;
     ret_n = 0;
+    if(ret) {
+        for(ret_n = 0; ret[ret_n]; ret_n++);
+    }
     for(p = tmp_filter; p && *p; p = l) {
         for(     ; *p &&  strchr(" \t\r\n", *p); p++);
 
@@ -2860,6 +3003,7 @@ u8 **build_filter(u8 *filter) {
         fprintf(stderr, "- filter %3d: %s\n", (i32)(i + 1), ret[i]);
     }
     FREE(tmp_filter)
+    if(ret_filter) *ret_filter = ret;
     return ret;
 }
 

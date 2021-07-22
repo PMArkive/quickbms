@@ -1,5 +1,5 @@
 /*  Lzlib - Compression library for the lzip format
-    Copyright (C) 2009-2017 Antonio Diaz Diaz.
+    Copyright (C) 2009-2019 Antonio Diaz Diaz.
 
     This library is free software. Redistribution and use in source and
     binary forms, with or without modification, are permitted provided
@@ -238,13 +238,14 @@ struct Matchfinder_base
   int num_prev_positions23;
   int num_prev_positions;	/* size of prev_positions */
   int pos_array_size;
+  int saved_dictionary_size;	/* dictionary_size restored by Mb_reset */
   bool at_stream_end;		/* stream_pos shows real end of file */
   bool flushing;
   };
 
 static bool Mb_normalize_pos( struct Matchfinder_base * const mb );
 
-static bool Mb_init( struct Matchfinder_base * const mb, const int before,
+static bool Mb_init( struct Matchfinder_base * const mb, const int before_size,
                      const int dict_size, const int after_size,
                      const int dict_factor, const int num_prev_positions23,
                      const int pos_array_factor );
@@ -321,7 +322,7 @@ struct Range_encoder
   uint32_t range;
   unsigned ff_count;
   uint8_t cache;
-  File_header header;
+  Lzip_header header;
   };
 
 static inline void Re_shift_low( struct Range_encoder * const renc )
@@ -338,7 +339,8 @@ static inline void Re_shift_low( struct Range_encoder * const renc )
   renc->low = ( renc->low & 0x00FFFFFFU ) << 8;
   }
 
-static inline void Re_reset( struct Range_encoder * const renc )
+static inline void Re_reset( struct Range_encoder * const renc,
+                             const unsigned dictionary_size )
   {
   int i;
   Cb_reset( &renc->cb );
@@ -347,7 +349,8 @@ static inline void Re_reset( struct Range_encoder * const renc )
   renc->range = 0xFFFFFFFFU;
   renc->ff_count = 0;
   renc->cache = 0;
-  for( i = 0; i < Fh_size; ++i )
+  Lh_set_dictionary_size( renc->header, dictionary_size );
+  for( i = 0; i < Lh_size; ++i )
     Cb_put_byte( &renc->cb, renc->header[i] );
   }
 
@@ -357,9 +360,8 @@ static inline bool Re_init( struct Range_encoder * const renc,
   {
   if( !Cb_init( &renc->cb, 65536 + min_free_bytes ) ) return false;
   renc->min_free_bytes = min_free_bytes;
-  Fh_set_magic( renc->header );
-  Fh_set_dictionary_size( renc->header, dictionary_size );
-  Re_reset( renc );
+  Lh_set_magic( renc->header );
+  Re_reset( renc, dictionary_size );
   return true;
   }
 
@@ -543,14 +545,14 @@ static void LZeb_reset( struct LZ_encoder_base * const eb,
                         const unsigned long long member_size );
 
 static inline bool LZeb_init( struct LZ_encoder_base * const eb,
-                              const int before, const int dict_size,
+                              const int before_size, const int dict_size,
                               const int after_size, const int dict_factor,
                               const int num_prev_positions23,
                               const int pos_array_factor,
                               const unsigned min_free_bytes,
                               const unsigned long long member_size )
   {
-  if( !Mb_init( &eb->mb, before, dict_size, after_size, dict_factor,
+  if( !Mb_init( &eb->mb, before_size, dict_size, after_size, dict_factor,
                 num_prev_positions23, pos_array_factor ) ) return false;
   if( !Re_init( &eb->renc, eb->mb.dictionary_size, min_free_bytes ) )
     return false;

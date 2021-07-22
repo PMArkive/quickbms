@@ -157,7 +157,7 @@ static INLINE void fast_genrand_block(ECRYPT_ctx * ctx, u8 cipher[],
     	       cipher, plain, N / 2);
 }
 
-#if defined(__GNUC__)
+#if 0 //aluigi fix// defined(__GNUC__)
 static int is_simd_cpu(void)
 {
     int sse2;

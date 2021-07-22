@@ -2896,6 +2896,7 @@ static sign_ext_db_t sign_ext_db[] = {  // do NOT use const, I use a little tric
     {  4, "MSF0", "msf" },
     {  4, "MUPS", "mups" },
     {  4, "D11M", "mesh" },
+    {  3, "\x1b""LJ", "lua" },
     // end of list
     { -1, NULL, NULL }
 };

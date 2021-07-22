@@ -1,5 +1,5 @@
 /*  Lzlib - Compression library for the lzip format
-    Copyright (C) 2009-2017 Antonio Diaz Diaz.
+    Copyright (C) 2009-2019 Antonio Diaz Diaz.
 
     This library is free software. Redistribution and use in source and
     binary forms, with or without modification, are permitted provided
@@ -25,9 +25,6 @@ struct Circular_buffer
   unsigned put;
   };
 
-static inline void Cb_reset( struct Circular_buffer * const cb )
-  { cb->get = 0; cb->put = 0; }
-
 static inline bool Cb_init( struct Circular_buffer * const cb,
                             const unsigned buf_size )
   {
@@ -41,6 +38,12 @@ static inline bool Cb_init( struct Circular_buffer * const cb,
 
 static inline void Cb_free( struct Circular_buffer * const cb )
   { free( cb->buffer ); cb->buffer = 0; }
+
+static inline void Cb_reset( struct Circular_buffer * const cb )
+  { cb->get = 0; cb->put = 0; }
+
+static inline unsigned Cb_empty( const struct Circular_buffer * const cb )
+  { return cb->get == cb->put; }
 
 static inline unsigned Cb_used_bytes( const struct Circular_buffer * const cb )
   { return ( (cb->get <= cb->put) ? 0 : cb->buffer_size ) + cb->put - cb->get; }
@@ -74,7 +77,8 @@ static bool Cb_unread_data( struct Circular_buffer * const cb,
 
 
 /* Copies up to 'out_size' bytes to 'out_buffer' and updates 'get'.
-   Returns the number of bytes copied.
+   If 'out_buffer' is null, the bytes are discarded.
+   Returns the number of bytes copied or discarded.
 */
 static unsigned Cb_read_data( struct Circular_buffer * const cb,
                               uint8_t * const out_buffer,
@@ -87,7 +91,7 @@ static unsigned Cb_read_data( struct Circular_buffer * const cb,
     size = min( cb->buffer_size - cb->get, out_size );
     if( size > 0 )
       {
-      memcpy( out_buffer, cb->buffer + cb->get, size );
+      if( out_buffer ) memcpy( out_buffer, cb->buffer + cb->get, size );
       cb->get += size;
       if( cb->get >= cb->buffer_size ) cb->get = 0;
       }
@@ -97,7 +101,7 @@ static unsigned Cb_read_data( struct Circular_buffer * const cb,
     const unsigned size2 = min( cb->put - cb->get, out_size - size );
     if( size2 > 0 )
       {
-      memcpy( out_buffer + size, cb->buffer + cb->get, size2 );
+      if( out_buffer ) memcpy( out_buffer + size, cb->buffer + cb->get, size2 );
       cb->get += size2;
       size += size2;
       }

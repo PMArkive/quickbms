@@ -1,5 +1,5 @@
 /*  Lzlib - Compression library for the lzip format
-    Copyright (C) 2009-2017 Antonio Diaz Diaz.
+    Copyright (C) 2009-2019 Antonio Diaz Diaz.
 
     This library is free software. Redistribution and use in source and
     binary forms, with or without modification, are permitted provided
@@ -44,7 +44,7 @@ static inline void Rd_free( struct Range_decoder * const rdec )
   { Cb_free( &rdec->cb ); }
 
 static inline bool Rd_finished( const struct Range_decoder * const rdec )
-  { return rdec->at_stream_end && !Cb_used_bytes( &rdec->cb ); }
+  { return rdec->at_stream_end && Cb_empty( &rdec->cb ); }
 
 static inline void Rd_finish( struct Range_decoder * const rdec )
   { rdec->at_stream_end = true; }
@@ -56,7 +56,7 @@ static inline unsigned Rd_available_bytes( const struct Range_decoder * const rd
   { return Cb_used_bytes( &rdec->cb ); }
 
 static inline unsigned Rd_free_bytes( const struct Range_decoder * const rdec )
-  { if( rdec->at_stream_end ) return 0; return Cb_free_bytes( &rdec->cb ); }
+  { return rdec->at_stream_end ? 0 : Cb_free_bytes( &rdec->cb ); }
 
 static inline unsigned long long Rd_purge( struct Range_decoder * const rdec )
   {
@@ -81,18 +81,18 @@ static bool Rd_find_header( struct Range_decoder * const rdec,
   *skippedp = 0;
   while( rdec->cb.get != rdec->cb.put )
     {
-    if( rdec->cb.buffer[rdec->cb.get] == magic_string[0] )
+    if( rdec->cb.buffer[rdec->cb.get] == lzip_magic[0] )
       {
       unsigned get = rdec->cb.get;
       int i;
-      File_header header;
-      for( i = 0; i < Fh_size; ++i )
+      Lzip_header header;
+      for( i = 0; i < Lh_size; ++i )
         {
         if( get == rdec->cb.put ) return false;		/* not enough data */
         header[i] = rdec->cb.buffer[get];
         if( ++get >= rdec->cb.buffer_size ) get = 0;
         }
-      if( Fh_verify( header ) ) return true;
+      if( Lh_verify( header ) ) return true;
       }
     if( ++rdec->cb.get >= rdec->cb.buffer_size ) rdec->cb.get = 0;
     ++*skippedp;
@@ -110,6 +110,8 @@ static inline int Rd_write_data( struct Range_decoder * const rdec,
 
 static inline uint8_t Rd_get_byte( struct Range_decoder * const rdec )
   {
+  /* 0xFF avoids decoder error if member is truncated at EOS marker */
+  if( Rd_finished( rdec ) ) return 0xFF;
   ++rdec->member_position;
   return Cb_get_byte( &rdec->cb );
   }
@@ -410,7 +412,7 @@ static inline void LZd_free( struct LZ_decoder * const d )
   { Cb_free( &d->cb ); }
 
 static inline bool LZd_member_finished( const struct LZ_decoder * const d )
-  { return ( d->member_finished && !Cb_used_bytes( &d->cb ) ); }
+  { return ( d->member_finished && Cb_empty( &d->cb ) ); }
 
 static inline unsigned LZd_crc( const struct LZ_decoder * const d )
   { return d->crc ^ 0xFFFFFFFFU; }

@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2018 Luigi Auriemma
+    Copyright 2009-2019 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -499,13 +499,14 @@ int CMD_CLog_func(int cmd) {
         g_reimport2_offset = CMD.var[1];
         g_reimport2_zsize  = CMD.var[2];
         g_reimport2_size   = CMD.var[5];
+        g_reimport2_xsize  = CMD.var[8];
     }
 
     // filecrypt is redundant with log/clog
-    int g_filecrypt_size_bck   = g_filecrypt_size;
-    g_filecrypt_size = 0;
+    int g_filecrypt_size_bck   = g_filecrypt.size;
+    g_filecrypt.size = 0;
     if(dumpa(fd, name, VARNAME(0), offset, size, zsize, xsize) < 0) return -1;
-    g_filecrypt_size = g_filecrypt_size_bck;
+    g_filecrypt.size = g_filecrypt_size_bck;
     return 0;
 }
 
@@ -748,10 +749,11 @@ int CMD_PutBits_func(int cmd) {
 int CMD_Get_func(int cmd) {
     int     fd,
             type,
-            tmpn    = 0,
+            retn    = 0,
             error   = 0,
             verbose_offset = 0;
-    u8      *tmp    = NULL;
+    u8      *ret    = NULL,
+            tmp[sizeof(long double)];
 
     fd   = FILEZ(2);
     type = NUM(1);
@@ -759,22 +761,51 @@ int CMD_Get_func(int cmd) {
     if(g_verbose < 0)  verbose_offset = myftell(fd);
     if(g_reimport < 0) verbose_offset = myftell(fd);    // necessary
 
-    tmp = myfrx(fd, type, &tmpn, &error);
-    // now tmp can be also NULL because myfrx is string/int
-    //if(!tmp) return -1;    // here should be good to quit... but I leave it as is for back compatibility with the old quickbms!
+    ret = myfrx(fd, type, &retn, &error);
+    // now ret can be also NULL because myfrx is string/int
+    //if(!ret) return -1;    // here should be good to quit... but I leave it as is for back compatibility with the old quickbms!
     if(error) return -1;
-    if(tmp) {
-        if(g_verbose < 0) verbose_print(verbose_offset, "get", CMD.var[0], tmp, -1, 0, type);
-        add_var(CMD.var[0], NULL, tmp, 0, -1);
+    if(ret) {
+        if(g_verbose < 0) verbose_print(verbose_offset, "get", CMD.var[0], ret, -1, 0, type);
+        add_var(CMD.var[0], NULL, ret, 0, -1);
     } else {
-        if(g_verbose < 0) verbose_print(verbose_offset, "get", CMD.var[0], NULL, 0, tmpn, type);
-        add_var(CMD.var[0], NULL, NULL, tmpn, sizeof(int));
+        if(g_verbose < 0) verbose_print(verbose_offset, "get", CMD.var[0], NULL, 0, retn, type);
+        add_var(CMD.var[0], NULL, NULL, retn, sizeof(int));
+        if(type == BMS_TYPE_FLOAT) {
+            float   tmp_float = 0;
+            myfseek(fd, -sizeof(u32), SEEK_CUR);
+            myfr_endian(fd, tmp, sizeof(u32));
+            memcpy(&tmp_float, tmp, MIN(sizeof(u32), sizeof(tmp_float)));
+            VARVAR(0).float64 = tmp_float;
+            VARVAR(0).isnum = -1;
+        } else if(type == BMS_TYPE_DOUBLE) {
+            double  tmp_double = 0;
+            myfseek(fd, -sizeof(u64), SEEK_CUR);
+            myfr_endian(fd, tmp, sizeof(u64));
+            memcpy(&tmp_double, tmp, MIN(sizeof(u64), sizeof(tmp_double)));
+            VARVAR(0).float64 = tmp_double;
+            VARVAR(0).isnum = -1;
+        } else if(type == BMS_TYPE_LONGDOUBLE) {
+            long double tmp_longdouble = 0;
+            myfseek(fd, -sizeof(tmp_longdouble), SEEK_CUR);
+            myfr_endian(fd, tmp, sizeof(tmp_longdouble));
+            memcpy(&tmp_longdouble, tmp, sizeof(tmp_longdouble));
+            VARVAR(0).float64 = tmp_longdouble;
+            VARVAR(0).isnum = -1;
+        }
         if(g_reimport < 0) {
             memset(&VARVAR(0).reimport, 0, sizeof(variable_reimport_t));
             VARVAR(0).reimport.offset   = verbose_offset;
             VARVAR(0).reimport.fd       = fd;
             VARVAR(0).reimport.type     = type;
-            if(myftell(fd) == verbose_offset) VARVAR(0).reimport.type = BMS_TYPE_NONE;  // no data has been read!
+            if(g_filexor.size > 0) VARVAR(0).reimport.use_filexor = g_filexor.cmd;  // check in case TOC is encrypted and data isn't
+            if(myftell(fd) == verbose_offset) {
+                if(g_reimport_shrink_enlarge && (type == BMS_TYPE_ASIZE)) {
+                    // ok, we need to reset the size
+                } else {
+                    VARVAR(0).reimport.type = BMS_TYPE_NONE;  // no data has been read!
+                }
+            }
             // no need to set the variable as "valid" for reimport2, type will be BMS_TYPE_NONE
         }
     }
@@ -1180,20 +1211,20 @@ int math_imul(int var1i, int var2i, int sign) {
 
 
 int math_operations(int cmd, int var1i, int op, int var2i, int sign) {
-#define DO_MATH_SIGN(var1,var2) \
+#define DO_MATH_SIGN(var1,var2,force_type) \
     switch(op) { \
         case '+': var1 += var2;                 break; \
         case '*': var1 *= var2;                 break; \
         case '/': if(!var2) { var1 = 0; } else { var1 /= var2; } break; \
         case '-': var1 -= var2;                 break; \
-        case '^': var1 ^= var2;                 break; \
-        case '&': var1 &= var2;                 break; \
-        case '|': var1 |= var2;                 break; \
-        case '%': if(!var2) { var1 = 0; } else { var1 %= var2; } break; \
+        case '^': var1 = (force_type)var1 ^ (force_type)var2;                 break; \
+        case '&': var1 = (force_type)var1 & (force_type)var2;                 break; \
+        case '|': var1 = (force_type)var1 | (force_type)var2;                 break; \
+        case '%': if(!var2) { var1 = 0; } else { var1 = (force_type)var1 % (force_type)var2; } break; \
         case '!': var1 = !var2;                 break; \
-        case '~': var1 = ~var2;                 break; \
-        case '<': var1 = var1 << var2;          break; \
-        case '>': var1 = var1 >> var2;          break; \
+        case '~': var1 = ~(force_type)var2;                 break; \
+        case '<': var1 = (force_type)var1 << (force_type)var2;          break; \
+        case '>': var1 = (force_type)var1 >> (force_type)var2;          break; \
         case 'l': var1 = rol(var1, var2, INTSZ);        break; \
         case 'r': var1 = ror(var1, var2, INTSZ);        break; \
         case 's': var1 = byteswap(var1, var2);  break; \
@@ -1206,9 +1237,9 @@ int math_operations(int cmd, int var1i, int op, int var2i, int sign) {
         case 'x': if(var2 && ((u_int)var1 % (u_int)var2)) { var1 += (var2 - ((u_int)var1 % (u_int)var2)); } break; \
         case 'y': if(var2 && ((u_int)var1 % (u_int)var2)) { var1 = ((u_int)var1 / (u_int)var2) * (u_int)var2; } break; \
         case 'z': { \
-            var1 &= (((u_int)1 << (var2 * (u_int)2)) - (u_int)1); \
-            var1 = (var1 << var2) | (var1 >> var2); \
-            var1 &= (((u_int)1 << (var2 * (u_int)2)) - (u_int)1); \
+            var1 = (force_type)var1 & (((u_int)1 << (force_type)(var2 * (u_int)2)) - (u_int)1); \
+            var1 = ((force_type)var1 << (force_type)var2) | ((force_type)var1 >> (force_type)var2); \
+            var1 = (force_type)var1 & (((u_int)1 << (force_type)(var2 * (u_int)2)) - (u_int)1); \
             break; \
         } \
         case -1000: var1 = swap32(var2); break; \
@@ -1415,12 +1446,19 @@ int math_operations(int cmd, int var1i, int op, int var2i, int sign) {
             var2u;
 
     if(sign <= 0) { // signed
-        DO_MATH_SIGN(var1i, var2i);
+        DO_MATH_SIGN(var1i, var2i, int);
     } else {        // unsigned
         var1u = (u_int)var1i;
         var2u = (u_int)var2i;
-        DO_MATH_SIGN(var1u, var2u);
+        DO_MATH_SIGN(var1u, var2u, u_int);
     }
+    return -1;
+}
+
+
+
+double math_operations_double(int cmd, double var1, int op, double var2, int sign) {
+    DO_MATH_SIGN(var1, var2, int);
     return -1;
 }
 
@@ -1430,7 +1468,8 @@ int CMD_Math_func(int cmd) {
     int     op,
             var1,
             var2,
-            sign;
+            sign,
+            ret     = 0;
 
     var1 = VAR32(0);
     op   = NUM(1);
@@ -1438,7 +1477,7 @@ int CMD_Math_func(int cmd) {
     sign = NUM(2);
 
     if((op > 0) && (op < 32)) {
-        var1 = readbase(VAR(2), op, NULL);
+        ret = readbase(VAR(2), op, NULL);
     } else {
         if(g_reimport < 0) {
             if(VARVAR(0).reimport.type != BMS_TYPE_NONE) {
@@ -1458,11 +1497,12 @@ int CMD_Math_func(int cmd) {
                     case 'r': rev_op = 'l'; break;
                     case 's': rev_op = 's'; break;
                     case 'w': rev_op = 'w'; break;
+                    case '%': rev_op = '='; break;  // ???
                     case '=': rev_op = 0;
                         memcpy(&(VARVAR(2).reimport), &(VARVAR(0).reimport), sizeof(variable_reimport_t));
                         VARVAR(0).reimport.type = BMS_TYPE_NONE;
                         break;
-                    case 'n': rev_op = 'n'; break;
+                    case 'n': rev_op = op;  break;
                     case 'v': rev_op = 'p'; break;
                     case 'p': rev_op = 'v'; break;
                     case -1000: rev_op = op; break;
@@ -1476,18 +1516,36 @@ int CMD_Math_func(int cmd) {
                     case -1015: rev_op = -1011; break;
                     case -1016: rev_op = -1012; break;
                     case -1017: rev_op = -1013; break;
+                    case 'x': rev_op = op;  break;  // ???
+                    case 'y': rev_op = 'x'; break;  // ???
+                    case 'a': rev_op = 'n'; break;  // 50% wrong
                     default:  rev_op = 0;   break;
                 }
                 if(rev_op) {
-                    VARVAR(0).reimport.math_op    = rev_op;
-                    VARVAR(0).reimport.math_value = var2;
+                    if(VARVAR(0).reimport.math_ops < MAX_REIMPORT_MATH_OPS) {
+                        VARVAR(0).reimport.math_op   [VARVAR(0).reimport.math_ops] = rev_op;
+                        VARVAR(0).reimport.math_value[VARVAR(0).reimport.math_ops] = CMD.var[2];
+                        VARVAR(0).reimport.math_opbck[VARVAR(0).reimport.math_ops] = op;
+                        VARVAR(0).reimport.math_ops++;
+                    }
                 }
             }
         }
-        var1 = math_operations(cmd, var1, op, var2, sign);
+        ret = math_operations(cmd, var1, op, var2, sign);
     }
 
-    add_var(CMD.var[0], NULL, NULL, var1, sizeof(int));
+    double  var1f, var2f;
+    int is_float = 0;   // check before add_var
+    if(VARVAR(0).isnum < 0) { var1f = VARVAR(0).float64; is_float |= 1; }
+    if(VARVAR(2).isnum < 0) { var2f = VARVAR(2).float64; is_float |= 2; }
+
+    add_var(CMD.var[0], NULL, NULL, ret, sizeof(int));
+
+    if(is_float) {
+        VARVAR(0).float64 = math_operations_double(cmd, (is_float & 1) ? var1f : var1, op, (is_float & 2) ? var2f : var2, sign);
+        VARVAR(0).isnum = -1;
+    }
+
     return 0;
 }
 
@@ -1774,7 +1832,8 @@ int CMD_NameCRC_func(int cmd) {
             *key        = NULL,
             *ivec       = NULL,
             *fname_alloc,
-            *p;
+            *p,
+            tmp[NUMBERSZ + 10 + 1];
 
     val32 = VAR32(1);
     if(CMD.var[2] >= 0) flist = VAR(2);
@@ -1804,7 +1863,8 @@ int CMD_NameCRC_func(int cmd) {
                     mem_fd = get_memory_file(flist);
                     mem_bck_offset = myftell(mem_fd);
                 } else {
-                    for(i = 0;; i++) {
+                    int path_idx;
+                    for(path_idx = 0;; path_idx++) {
                         SCAN_INPUT_FILE_PATH(fulldir, flist)
                         fd = xfopen(fulldir, "rb");
                         if(fd) break;
@@ -1836,7 +1896,7 @@ int CMD_NameCRC_func(int cmd) {
                     if(!buff) break;
                 }
 
-                //buff = incremental_fread(fd, NULL, 1, NULL, 0);  // very slow and new allocation at every read!
+                //buff = incremental_fread(fd, NULL, 1, NULL, 0, 0);  // very slow and new allocation at every read!
                 //if(!buff) break;
 
                 buff = skip_begin_string(buff);
@@ -1971,7 +2031,9 @@ int CMD_NameCRC_func(int cmd) {
     if(namecrc) {
         fname = namecrc->name;
     } else {
-        fname = "";
+        //fname = "";
+        sprintf(tmp, g_decimal_names ? "%"PRIu"." : "0x%"PRIx".", (int)val32);  // automatic 32/64bit, quickbms.exe can't read 64bit fields so this is ok
+        fname = tmp;
     }
 
     p = get_varname(CMD.var[0]);
@@ -2012,6 +2074,7 @@ int CMD_SLog_func(int cmd) {
         g_reimport2_offset = CMD.var[1];
         g_reimport2_zsize  = -1;
         g_reimport2_size   = CMD.var[2];
+        g_reimport2_xsize  = -1;
     }
 
     if(dumpa_slog(fd, name, offset, size, type) < 0) return -1;
@@ -2037,13 +2100,14 @@ int CMD_Log_func(int cmd) {
         g_reimport2_offset = CMD.var[1];
         g_reimport2_zsize  = -1;
         g_reimport2_size   = CMD.var[2];
+        g_reimport2_xsize  = CMD.var[6];
     }
 
     // filecrypt is redundant with log/clog
-    int g_filecrypt_size_bck   = g_filecrypt_size;
-    g_filecrypt_size = 0;
+    int g_filecrypt_size_bck   = g_filecrypt.size;
+    g_filecrypt.size = 0;
     if(dumpa(fd, name, VARNAME(0), offset, size, 0, xsize) < 0) return -1;
-    g_filecrypt_size = g_filecrypt_size_bck;
+    g_filecrypt.size = g_filecrypt_size_bck;
     return 0;
 }
 
@@ -2246,11 +2310,32 @@ int CMD_Set_func(int cmd) {
 
     } else if(NUM(1) == BMS_TYPE_UNKNOWN) {
         fprintf(stderr, "\n- please insert the content for the variable %s:\n  ", get_varname(CMD.var[0]));
-        var = incremental_fread(stdin, &varsz, 1, NULL, 0); // not static
+        var = incremental_fread(stdin, &varsz, 1, NULL, 0, 0); // not static
 
     } else if(ISNUMTYPE(NUM(1))) { // number type
         varn  = VAR32(2);
         varsz = VARSZ(2);
+
+    } else if(NUM(1) == BMS_TYPE_SIGNED_BYTE) {
+        varn  = VAR32(2) & 0xff;
+        varsz = sizeof(int);
+        if(varn & 0x80)       varn |= -0x100LL;
+    } else if(NUM(1) == BMS_TYPE_SIGNED_SHORT) {
+        varn  = VAR32(2) & 0xffff;
+        varsz = sizeof(int);
+        if(varn & 0x8000)     varn |= -0x10000LL;
+    } else if(NUM(1) == BMS_TYPE_SIGNED_THREEBYTE) {
+        varn  = VAR32(2) & 0xffffff;
+        varsz = sizeof(int);
+        if(varn & 0x800000)   varn |= -0x1000000LL;
+    } else if(NUM(1) == BMS_TYPE_SIGNED_LONG) {
+        varn  = VAR32(2) & 0xffffffff;
+        varsz = sizeof(int);
+        if(varn & 0x80000000) varn |= -0x100000000LL;
+
+    } else if(NUM(1) == BMS_TYPE_UNICODE32) {   // utf32 to utf8
+        var_static = var = set_unicode32_to_utf8(VAR(2), VARSZ(2), NULL);
+        varsz = -1;
 
     } else {
         var_static = var = VAR(2);
@@ -2400,6 +2485,7 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
             force_len,
             hex,
             c_out,
+            f_out,
             space,
             tmpsz,
             buffsz;
@@ -2432,6 +2518,7 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
                 }
                 hex       = 0;
                 c_out     = 0;
+                f_out     = 0;
                 space     = 0;
                 force_len = -1;
                 idx = get_var_from_name(msg, p - msg);
@@ -2459,6 +2546,12 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
                         } else if(tolower(*flags) == 'c') {
                             c_out = -1;
 
+                        } else if(
+                            !strnicmp(flags, "float", 5) ||
+                            (tolower(*flags) == 'f')
+                        ) {
+                            f_out = 1;
+
                         } else {
                             if(strchr(flags, ' ')) space = 1;
                             t = get_var_from_name(flags, p - flags);
@@ -2482,8 +2575,10 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
                     if(force_len < len) len = force_len;
                 }
                 if(hex > 0) {
-                    if(g_variable[idx].isnum) {
+                    if(g_variable[idx].isnum > 0) {
                         PRINT_FPRINTF("0x%"PRIx, get_var32(idx))
+                    } else if(g_variable[idx].isnum < 0) {
+                        PRINT_FPRINTF("%a", g_variable[idx].float64)
                     } else {
                         while(len--) {
                             PRINT_FPRINTF("%02x%s", *var, space ? " " : "")
@@ -2505,8 +2600,27 @@ u8 *do_print_cmd(u8 *msg, FILE *fdo) {
                         var++;
                     }
                     PRINT_FPUTC('\"')
+                } else if(f_out) {
+                    if(g_variable[idx].isnum < 0) {
+                        PRINT_FPRINTF("%f", g_variable[idx].float64)
+                    } else {
+                        t = get_var32(idx);
+                        double  tmp_double  = 0;
+#ifdef QUICKBMS64
+                        memcpy(&tmp_double, &t, MIN(sizeof(tmp_double), sizeof(t)));
+#else
+                        float   tmp_float   = 0;
+                        memcpy(&tmp_float,  &t, MIN(sizeof(tmp_float), sizeof(t)));
+                        tmp_double = tmp_float;
+#endif
+                        PRINT_FPRINTF("%f", tmp_double)
+                    }
                 } else {
-                    PRINT_FWRITE(var, len)
+                    if(g_variable[idx].isnum < 0) {
+                        PRINT_FPRINTF("%f", g_variable[idx].float64)
+                    } else {
+                        PRINT_FWRITE(var, len)
+                    }
                 }
                 msg = p + 1;
             } else {
@@ -3369,10 +3483,12 @@ int CMD_Open_func(int cmd) {
         if(!special) special = 1;   // in case of FDSE2
         fdir = g_file_folder;
         p = get_filename(filez->fullname);
+        /* https://zenhax.com/viewtopic.php?p=40920#p40920
+        // quickbms -G differs from quickbms, FDSE is used for relative paths since "." can be used for absolute ones
         if(g_is_gui && mystrchrs(fname, PATH_DELIMITERS)) {
             // usually fname is already a full path but not ever
             fdir = NULL;
-        } else {
+        } else*/ {
             CMD_Open_func_fname(&fname, (special < 0) ? fdir : NULL, filez->fullname, p, 0);
         }
 
@@ -3526,8 +3642,8 @@ skip_arg_init:
     QUICK_COMP_ASSIGN2(LZ77WII_RAW10, lz77wii_raw)
     //PUYO_PVZ
     QUICK_COMP_ASSIGN2(SLZ, UnPackSLZ)
-    QUICK_COMP_ASSIGN2(LZS, MPPC)
-    QUICK_COMP_ASSIGN2(LZS_BIG, MPPC_BIG)
+    //QUICK_COMP_ASSIGN2(LZS, MPPC)         // mppc already exists
+    //QUICK_COMP_ASSIGN2(LZS_BIG, MPPC_BIG) // mppc_big already exists
     QUICK_COMP_ASSIGN2(YAZ0, SZS)
     QUICK_COMP_ASSIGN2(GZPACK, PACK)
     else if(stristr(str, "zip_dynamic") || stristr(str, "zlib_dynamic")) g_compression_type = COMP_UNZIP_DYNAMIC;
@@ -3634,104 +3750,52 @@ skip_arg_init:
 
 
 
-int CMD_FileXOR_func(int cmd) {
+int CMD_FileXOR_func_internal(int cmd, filexor_t *fx) {
     int     fd,
             pos_offset,
             curroff;
     u8      *tmp;
 
+    memset(fx, 0, sizeof(filexor_t));   // no free()
+    fx->cmd         = cmd;
     if(CMD.var[0] >= 0) {
         NUMS2BYTES(VAR(0), CMD.num[1], CMD.str[0], CMD.num[0], 0)
     }
-    g_filexor           = STR(0);
-    g_filexor_size      = NUM(1);
-    if(g_filexor_size <= 0) {
-        g_filexor       = NULL;
-        g_filexor_pos   = NULL;
-        g_filexor_size  = 0;
-    } else {
-        g_filexor_pos   = &NUM(2);
-        fd              = FILEZ(4); // not implemented
+    fx->key         = STR(0);
+    fx->size        = NUM(1);
+    if(fx->size > 0) {
+        fx->pos     = &NUM(2);
+        fd          = FILEZ(4); // not implemented
         if(CMD.var[3] >= 0) pos_offset = VAR32(3);
         else                pos_offset = myftell(fd);
         /*if(pos_offset >= 0)*//*allow negative offsets like in Ubersoldier*/ {
             curroff = myftell(fd);
             if(curroff >= pos_offset) {
-                (*g_filexor_pos) = curroff - pos_offset;
+                (*fx->pos) = curroff - pos_offset;
             } else {
-                (*g_filexor_pos) = g_filexor_size - ((pos_offset - curroff) % g_filexor_size);
+                (*fx->pos) = fx->size - ((pos_offset - curroff) % fx->size);
             }
         }
     }
     return 0;
+}
+
+
+
+int CMD_FileXOR_func(int cmd) {
+    return CMD_FileXOR_func_internal(cmd, &g_filexor);
 }
 
 
 
 int CMD_FileRot13_func(int cmd) {
-    int     fd,
-            pos_offset,
-            curroff;
-    u8      *tmp;
-
-    if(CMD.var[0] >= 0) {
-        NUMS2BYTES(VAR(0), CMD.num[1], CMD.str[0], CMD.num[0], 0)
-    }
-    g_filerot           = STR(0);
-    g_filerot_size      = NUM(1);
-    if(g_filerot_size <= 0) {
-        g_filerot       = NULL;
-        g_filerot_pos   = NULL;
-        g_filerot_size  = 0;
-    } else {
-        g_filerot_pos   = &NUM(2);
-        fd              = FILEZ(4); // not implemented
-        if(CMD.var[3] >= 0) pos_offset = VAR32(3);
-        else                pos_offset = myftell(fd);
-        /*if(pos_offset >= 0)*//*allow negative offsets like in Ubersoldier*/ {
-            curroff = myftell(fd);
-            if(curroff >= pos_offset) {
-                (*g_filerot_pos) = curroff - pos_offset;
-            } else {
-                (*g_filerot_pos) = g_filerot_size - ((pos_offset - curroff) % g_filerot_size);
-            }
-        }
-    }
-    return 0;
+    return CMD_FileXOR_func_internal(cmd, &g_filerot);
 }
 
 
 
 int CMD_FileCrypt_func(int cmd) {
-    int     fd,
-            pos_offset,
-            curroff;
-    u8      *tmp;
-
-    if(CMD.var[0] >= 0) {
-        NUMS2BYTES(VAR(0), CMD.num[1], CMD.str[0], CMD.num[0], 0)
-    }
-    g_filecrypt         = STR(0);
-    g_filecrypt_size    = NUM(1);
-    if(g_filecrypt_size <= 0) {
-        g_filecrypt     = NULL;
-        g_filecrypt_pos = NULL;
-        g_filecrypt_size= 0;
-    } else {
-        g_filecrypt_pos = &NUM(2);
-        fd              = FILEZ(4); // not implemented
-        if(CMD.var[3] >= 0) pos_offset = VAR32(3);
-        else                pos_offset = myftell(fd);
-        /*if(pos_offset >= 0)*//*allow negative offsets like in Ubersoldier*/ {
-            curroff = myftell(fd);
-            if(curroff >= pos_offset) {
-                (*g_filecrypt_pos) = curroff - pos_offset;
-            } else {
-                (*g_filecrypt_pos) = g_filecrypt_size - ((pos_offset - curroff) % g_filecrypt_size);
-            }
-        }
-    }
-    return 0;
+    return CMD_FileXOR_func_internal(cmd, &g_filecrypt);
 }
 
 
@@ -3809,7 +3873,7 @@ int CMD_PutVarChr_func(int cmd) {
         varsz = VARSZ(0);
     }
     offset = VAR32(1);
-    num    = (int)get_var_ptr_cmd(cmd, 2, 0);
+    num    = (int)get_var_ptr_cmd(-1, cmd, 2, 0, NULL);
     //num    = VAR32(2);
     numsz  = NUM(3);
     if(numsz < 0) {  // so anything but BMS_TYPE_LONG, BMS_TYPE_SHORT, BMS_TYPE_BYTE, BMS_TYPE_THREEBYTE
@@ -4323,7 +4387,7 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
     static int  load_algos      = 0;
     const EVP_CIPHER  *mycrypto = NULL;
     const EVP_MD      *myhash   = NULL;
-    u8      hash_key[EVP_MAX_MD_SIZE] = "";
+    u8      hash_key[EVP_MAX_MD_SIZE + 16] = ""; // it's 64 plus something just in case
 #endif
     u32     tmp1,
             tmp2,
@@ -4432,10 +4496,18 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
     FREE(molebox_ctx)
     FREE(replace_ctx)
     FREE(rc4_ctx)
+    d3des_ctx = 0;
+    FREE(chacha_ctx)
     if(cmd < 0) return 0;  // bms init
 
-    type   = VAR(0);
-    type   = skip_delimit(type);
+    u8  *type_v = VAR(0);
+    u8  *type_tmp = alloca(strlen(type_v)+1);   // on the stack, automatically freed
+    if(type_tmp) {
+        strcpy(type_tmp, type_v);
+        type   = skip_delimit(type_tmp);
+    } else {
+        type   = skip_delimit(type_v);
+    }
     key    = STR(1);
     keysz  = NUM(1);
     ivec   = STR(2);    // ivec can be NULL (ecb) or a string (CBC)
@@ -4706,7 +4778,7 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
         if(!ice_ctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
 
     } else if(!stricmp(type, "rotor")) {
-        rotor_ctx = rotorobj_new(ivec ? myatoi(ivec) : 12, key, keysz);
+        rotor_ctx = rotorobj_new(ivec ? myatoi(ivec) : 6, key, keysz);  // was 12 (by mistake) till quickbms 0.10.0
         if(!rotor_ctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
 
     } else if(!stricmp(type, "ssc")) {
@@ -4988,6 +5060,19 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
             }
         }
 
+    } else if(!stricmp(type, "d3des")) {
+        d3des_ctx = 1;
+        u8  d3des_key[8];
+        memset(d3des_key, 0, sizeof(d3des_key));
+        strncpy(d3des_key, key, sizeof(d3des_key));
+        if(!g_encrypt_mode) deskey(d3des_key, 1);
+        else                deskey(d3des_key, 0);
+
+    } else if(!stricmp(type, "chacha20")) {
+        chacha_ctx = calloc(1, sizeof(chacha20_ctx));
+        if(!chacha_ctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
+        chacha20_setup(chacha_ctx, key, keysz, ivec ? ivec : (u8*)"\0\0\0\0\0\0\0\0");
+
 
 /*
     put new algorithms above here
@@ -5014,8 +5099,8 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
         myhash   = NULL;
         DO_QUICKBMS_HASH(hash_key, sizeof(hash_key));
 
-    } else if(!strncmp(type, "\x01\x99", 2) || !strnicmp(type, "ZIP_AES", 7)) {
-        if(!strncmp(type, "\x01\x99", 2)) {
+    } else if(!strncmp(type_v, "\x01\x99", 2) || !strnicmp(type, "ZIP_AES", 7)) {
+        if(!strncmp(type_v, "\x01\x99", 2)) {
             /*
             Offset 	Size(bytes) 	Content
             0 	2 	Extra field header ID (0x9901)
@@ -5025,14 +5110,14 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
             8 	1 	Integer mode value indicating AES encryption strength
             9 	2 	The actual compression method used to compress the file
             */
-            tmp1 = 64 + (type[8] * 64);
+            tmp1 = 64 + (type_v[8] * 64);
         } else {
                                           tmp1 = 256;
             if(!stricmp(type + 7, "128")) tmp1 = 128;
             if(!stricmp(type + 7, "192")) tmp1 = 192;
         }
         memset(hash_key, 0, sizeof(hash_key));
-        PKCS5_PBKDF2_HMAC_SHA1(key, keysz, ivec, (tmp1 / 8) / 2, 1000, sizeof(hash_key), hash_key);
+        PKCS5_PBKDF2_HMAC_SHA1(key, keysz, ivec, ivec ? ((tmp1 / 8) / 2) : 0, 1000, sizeof(hash_key), hash_key);
         key     = hash_key;
         keysz   = tmp1 / 8;
 
@@ -5042,29 +5127,19 @@ int CMD_Encryption_func(int cmd, int invert_mode) {
         memset(zip_aes_ctx->ivec, 0, AES_BLOCK_SIZE);
         zip_aes_ctx->num = AES_BLOCK_SIZE;
 
-        if(!strncmp(type, "\x01\x99", 2)) {
-            zip_aes_ctx->type = type[4] | (type[5] << 8) | (type[6] << 16) | (type[7] << 24);
+        if(!strncmp(type_v, "\x01\x99", 2)) {
+            zip_aes_ctx->type = type_v[4] | (type_v[5] << 8) | (type_v[6] << 16) | (type_v[7] << 24);
         } else {
                  if(stristr(type, "AE-1"))  zip_aes_ctx->type = 0x45410001;
-            else if(stristr(type, "AE-1"))  zip_aes_ctx->type = 0x45410002;
+            else if(stristr(type, "AE-2"))  zip_aes_ctx->type = 0x45410002;
             else                            zip_aes_ctx->type = 0x45410002;
         }
 
-        if(zip_aes_ctx->type == 0x45410002) {
-#ifndef DISABLE_SSL
-            myhash = EVP_get_digestbyname("sha1");
-            mymemmove(key, key + keysz, keysz);
-
-            evpmd_ctx = calloc(1, sizeof(EVP_MD_CTX));
-            if(!evpmd_ctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
-            EVP_MD_CTX_init(evpmd_ctx);
-            EVP_DigestInit(evpmd_ctx, myhash);
-
+        if(zip_aes_ctx->type >= 0x45410002) {
             hmac_ctx = calloc(1, sizeof(HMAC_CTX));
             if(!hmac_ctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
             HMAC_CTX_init(hmac_ctx);
-            HMAC_Init(hmac_ctx, key + keysz, keysz, EVP_MD_CTX_md(evpmd_ctx));
-#endif
+            HMAC_Init(hmac_ctx, key + keysz, keysz, EVP_sha1());
         }
 
     } else if(!strnicmp(type, "modpow", 6)) {
@@ -5667,6 +5742,97 @@ int CMD_CallDLL_quick_check_memory(void *addr) {
 
 
 
+// completely free from any Python dependency: #include <Python.h>
+#define PyObject            void
+#define PyCompilerFlags     void
+#define PyByteArrayObject   void
+typedef ssize_t         Py_ssize_t;
+#       define PyAPI_FUNC(RTYPE) RTYPE
+#define Py_single_input 256
+#define Py_file_input 257
+#define Py_eval_input 258
+#define PY_LONG_LONG long long
+#define Py_DECREF(op)   {} //macros are a mess to implement
+#define Py_XDECREF(op)  {} //macros are a mess to implement
+
+PyAPI_FUNC(int) (*Py_IsInitialized)(void) = NULL;
+PyAPI_FUNC(void) (*Py_Initialize)(void) = NULL;
+PyAPI_FUNC(void) (*Py_Finalize)(void) = NULL;
+PyAPI_FUNC(PyObject *) (*PyImport_AddModule)(const char *name);
+PyAPI_FUNC(PyObject *) (*PyModule_GetDict)(PyObject *) = NULL;
+PyAPI_FUNC(PyObject *) (*PyRun_StringFlags)(const char *, int, PyObject *, PyObject *, PyCompilerFlags *) = NULL;
+#define PyRun_String(str, s, g, l) PyRun_StringFlags(str, s, g, l, NULL)
+PyAPI_FUNC(PyObject *) (*PyBuffer_FromReadWriteMemory)(void *ptr, Py_ssize_t size) = NULL;
+PyAPI_FUNC(PyObject *) (*PyLong_FromLongLong)(PY_LONG_LONG) = NULL;
+PyAPI_FUNC(PyObject *) (*PyObject_GetAttrString)(PyObject *, const char *) = NULL;
+PyAPI_FUNC(int) (*PyTuple_SetItem)(PyObject *, Py_ssize_t, PyObject *) = NULL;
+PyAPI_FUNC(int) (*PyDict_SetItemString)(PyObject *dp, const char *key, PyObject *item) = NULL;
+PyAPI_FUNC(int) (*PyCallable_Check)(PyObject *) = NULL;
+PyAPI_FUNC(PyObject *) (*PyTuple_New)(Py_ssize_t size) = NULL;
+PyAPI_FUNC(PyObject *) (*PyObject_CallObject)(PyObject *callable_object, PyObject *args) = NULL;
+PyAPI_FUNC(PyObject *) (*PyString_FromString)(const char *) = NULL;
+PyAPI_FUNC(PyObject *) (*PyErr_Occurred)(void) = NULL;
+PyAPI_FUNC(void) (*PyErr_Print)(void) = NULL;
+PyAPI_FUNC(char *) (*PyByteArray_AsString)(PyObject *) = NULL;
+PyAPI_FUNC(char *) (*PyString_AsString)(PyObject *) = NULL;
+PyAPI_FUNC(long) (*PyLong_AsLong)(PyObject *) = NULL;
+PyAPI_FUNC(PY_LONG_LONG) (*PyLong_AsLongLong)(PyObject *) = NULL;
+PyAPI_FUNC(int) (*PyArg_ParseTuple)(PyObject *, const char *, ...) = NULL;
+PyAPI_FUNC(void) (*PyErr_Clear)(void) = NULL;
+PyAPI_FUNC(PyObject *) (*PyByteArray_FromObject)(PyObject *) = NULL;
+PyAPI_FUNC(long) (*PyInt_AsLong)(PyObject *) = NULL;
+PyAPI_FUNC(double) (*PyFloat_AsDouble)(PyObject *) = NULL;
+PyAPI_FUNC(PyObject *) (*PyFloat_FromDouble)(double) = NULL;
+
+int myPython_init(void) {
+    #define myPython_GetProcAddress(X) \
+            if(!X) X = GETFUNC(#X);
+    static HMODULE hlib     = NULL;
+    if(hlib) return 0;
+    i32     i;
+    char    tmp[64];
+    for(i = 27; i < 50; i++) {  // in theory it covers from Python 2.7 till Python 4.9... still wrong
+        sprintf(tmp, "python%d.dll", i);
+        hlib = LOADDLL(tmp);
+        if(hlib) break;
+    }
+    if(!hlib) return -1;
+    myPython_GetProcAddress(Py_IsInitialized)
+    myPython_GetProcAddress(Py_Initialize)
+    myPython_GetProcAddress(Py_Finalize)
+    myPython_GetProcAddress(PyImport_AddModule)
+    myPython_GetProcAddress(PyModule_GetDict)
+    myPython_GetProcAddress(PyRun_StringFlags)
+    myPython_GetProcAddress(PyBuffer_FromReadWriteMemory)
+    myPython_GetProcAddress(PyLong_FromLongLong)
+    myPython_GetProcAddress(PyObject_GetAttrString)
+    myPython_GetProcAddress(PyTuple_SetItem)
+    myPython_GetProcAddress(PyDict_SetItemString)
+    myPython_GetProcAddress(PyCallable_Check)
+    myPython_GetProcAddress(PyTuple_New)
+    myPython_GetProcAddress(PyObject_CallObject)
+    myPython_GetProcAddress(PyString_FromString)
+    myPython_GetProcAddress(PyErr_Occurred)
+    myPython_GetProcAddress(PyErr_Print)
+    myPython_GetProcAddress(PyByteArray_AsString)
+    myPython_GetProcAddress(PyString_AsString)
+    myPython_GetProcAddress(PyLong_AsLong)
+    myPython_GetProcAddress(PyLong_AsLongLong)
+    myPython_GetProcAddress(PyArg_ParseTuple)
+    myPython_GetProcAddress(PyErr_Clear)
+    myPython_GetProcAddress(PyByteArray_FromObject)
+    myPython_GetProcAddress(PyInt_AsLong)
+    myPython_GetProcAddress(PyFloat_AsDouble)
+    myPython_GetProcAddress(PyFloat_FromDouble)
+    return 0;
+}
+
+#include "libs/lua/src/lua.h"
+#include "libs/lua/src/lualib.h"
+#include "libs/lua/src/lauxlib.h"
+
+
+
 #define MAX_DLLS        32
 #define MAX_DLL_FUNCS   64
 typedef struct {
@@ -5681,18 +5847,22 @@ typedef struct {
     u8      is_lib;
     u8      is_mem;
     u8      is_tcc;
+    u8      is_pyt;
+    u8      is_lua;
     u32     crc;    // crc for memory files, in this case a 32bit crc is enough
     calldllfunc_t   func[MAX_DLL_FUNCS];
 } calldll_t;
 
 int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_size) {
-    static  calldll_t   dll[MAX_DLLS] = {{NULL,NULL,0,0,0,0,0,{{NULL,0,NULL}}}};  // cache for multiple dlls/funcs
+    static  calldll_t   dll[MAX_DLLS] = {{NULL,NULL,0,0,0,0,0,0,0,{{NULL,0,NULL}}}};  // cache for multiple dlls/funcs
 
     //static u8   fulldlldir[PATHSZ + 1]; // used only here so don't waste the stack
     static u8   *fulldlldir = NULL;
 
     HMODULE hlib = NULL;
     void    *args[MAX_ARGS];
+    int     args_size[MAX_ARGS];
+    int     args_idx[MAX_ARGS];
     int     (*funcaddr)()    = NULL;
     int     funcoff     = 0,
             argc,
@@ -5710,7 +5880,11 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
             is_exe      = 0,
             is_lib      = 0,    // alternative of is_dat
             is_mem      = 0,    // remember to replicate in calldll_t!
-            is_tcc      = 0;
+            is_tcc      = 0,
+            is_pyt      = 0,
+            is_lua      = 0;
+
+    PyObject *pFunc, *pArgs, *pValue, *pTmp;
 
     if(cmd < 0) {   // needed only for those dlls that require reinitialization
         for(di = 0; di < MAX_DLLS; di++) {
@@ -5744,8 +5918,10 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
         if(p && (!stricmp(p, ".exe") || !stricmp(p, ".dll") || !stricmp(p, ".so"))) is_lib = 1; // the others are handled as raw functions
     }
 
+    memory_file_t   *gmf    = NULL;
     if(is_mem) {
-        crc = mycrc(g_memory_file[-get_memory_file(dllname)].data, g_memory_file[-get_memory_file(dllname)].size);
+        gmf = &(g_memory_file[-get_memory_file(dllname)]);
+        crc = mycrc(gmf->data, gmf->size);
     }
     for(di = 0; di < MAX_DLLS; di++) {
         if(!dll[di].name) continue;
@@ -5759,6 +5935,8 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
         is_lib = dll[di].is_lib;
         is_mem = dll[di].is_mem;
         is_tcc = dll[di].is_tcc;
+        is_pyt = dll[di].is_pyt;
+        is_lua = dll[di].is_lua;
         for(dj = 0; dj < MAX_DLL_FUNCS; dj++) {
             if(!dll[di].func[dj].addr) continue;
             if(funcname) {
@@ -5776,7 +5954,8 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
     if(!hlib) {
         external_executable_prompt(cmd, dllname, is_exe);
 
-        for(i = 0;; i++) {
+        int path_idx;
+        for(path_idx = 0; !hlib; path_idx++) {
             SCAN_INPUT_FILE_PATH(fulldlldir, dllname)
             if(is_lib) {
                 hlib = LOADDLL(fulldlldir);
@@ -5793,24 +5972,219 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
                 }
                 */
             } else if(is_mem) {
+
+                if(!gmf->data || !gmf->size) {
+                    fprintf(stderr, "\nError: the memory DLL %s is empty or undeclared\n", dllname);
+                    myexit_cmd(cmd, QUICKBMS_ERROR_DLL);
+                }
+
 #ifdef WIN32
                 if(callconv && !stricmp(callconv, "tcc")) {
                     if(TCC_libtcc_init() < 0) myexit(QUICKBMS_ERROR_BMS);
-                    TCCState *tccstate = tcc_compiler(g_memory_file[-get_memory_file(dllname)].data);
+                    TCCState *tccstate = tcc_compiler(gmf->data);
+
+                    #define tcc_symbols_add(X)  tcc_add_symbol(tccstate, #X, X)
+
+                    //stdio.h
+                    tcc_symbols_add(fopen);
+                    tcc_symbols_add(freopen);
+                    tcc_symbols_add(fflush);
+                    tcc_symbols_add(fclose);
+                    //tcc_symbols_add(remove);
+                    //tcc_symbols_add(rename);
+                    //tcc_symbols_add(tmpfile);
+                    //tcc_symbols_add(tempnam);
+                    //tcc_symbols_add(rmtmp);
+                    //tcc_symbols_add(unlink);
+                    tcc_symbols_add(fprintf);
+                    tcc_symbols_add(printf);
+                    tcc_symbols_add(sprintf);
+                    tcc_symbols_add(vfprintf);
+                    tcc_symbols_add(vprintf);
+                    tcc_symbols_add(vsprintf);
+                    tcc_symbols_add(fscanf);
+                    tcc_symbols_add(scanf);
+                    tcc_symbols_add(sscanf);
+                    tcc_symbols_add(fgetc);
+                    tcc_symbols_add(fgets);
+                    tcc_symbols_add(fputc);
+                    tcc_symbols_add(fputs);
+                    tcc_symbols_add(gets);
+                    tcc_symbols_add(puts);
+                    tcc_symbols_add(ungetc);
+                    tcc_symbols_add(getc);
+                    tcc_symbols_add(putc);
+                    tcc_symbols_add(getchar);
+                    tcc_symbols_add(putchar);
+                    tcc_symbols_add(fread);
+                    tcc_symbols_add(fwrite);
+                    tcc_symbols_add(fseek);
+                    tcc_symbols_add(ftell);
+                    tcc_symbols_add(rewind);
+                    tcc_symbols_add(fgetpos);
+                    tcc_symbols_add(fsetpos);
+                    tcc_symbols_add(feof);
+                    tcc_symbols_add(ferror);
+
+                    //stdlib.h
+                    tcc_symbols_add(atoi);
+                    tcc_symbols_add(atof);
+                    tcc_symbols_add(malloc);
+                    tcc_symbols_add(calloc);
+                    tcc_symbols_add(realloc);
+                    tcc_symbols_add(free);
+                    tcc_symbols_add(itoa);
+                    tcc_symbols_add(exit);
+                    tcc_symbols_add(bsearch);
+                    tcc_symbols_add(qsort);
+                    tcc_symbols_add(div);
+                    tcc_symbols_add(abs);
+
+                    //string.h
+                    tcc_symbols_add(memchr);
+                    tcc_symbols_add(memcmp);
+                    tcc_symbols_add(memcpy);
+                    tcc_symbols_add(memmove);
+                    tcc_symbols_add(memset);
+                    tcc_symbols_add(strcat);
+                    tcc_symbols_add(strchr);
+                    tcc_symbols_add(strcmp);
+                    tcc_symbols_add(strcoll);
+                    tcc_symbols_add(strcpy);
+                    tcc_symbols_add(strcspn);
+                    tcc_symbols_add(strerror);
+                    tcc_symbols_add(strlen);
+                    tcc_symbols_add(strncat);
+                    tcc_symbols_add(strncmp);
+                    tcc_symbols_add(strncpy);
+                    tcc_symbols_add(strpbrk);
+                    tcc_symbols_add(strrchr);
+                    tcc_symbols_add(strspn);
+                    tcc_symbols_add(strstr);
+                    tcc_symbols_add(strtok);
+                    tcc_symbols_add(strxfrm);
+                    tcc_symbols_add(memccpy);
+                    tcc_symbols_add(memicmp);
+                    tcc_symbols_add(strdup);
+                    tcc_symbols_add(strcmpi);
+                    tcc_symbols_add(stricmp);
+                    tcc_symbols_add(stricoll);
+                    tcc_symbols_add(strlwr);
+                    tcc_symbols_add(strnicmp);
+                    tcc_symbols_add(strnset);
+                    tcc_symbols_add(strrev);
+                    tcc_symbols_add(strset);
+                    tcc_symbols_add(strupr);
+
+                    //math.h
+                    tcc_symbols_add(sin);
+                    tcc_symbols_add(cos);
+                    tcc_symbols_add(tan);
+                    tcc_symbols_add(sinh);
+                    tcc_symbols_add(cosh);
+                    tcc_symbols_add(tanh);
+                    tcc_symbols_add(asin);
+                    tcc_symbols_add(acos);
+                    tcc_symbols_add(atan);
+                    tcc_symbols_add(atan2);
+                    tcc_symbols_add(exp);
+                    tcc_symbols_add(log);
+                    tcc_symbols_add(log10);
+                    tcc_symbols_add(pow);
+                    tcc_symbols_add(sqrt);
+                    tcc_symbols_add(ceil);
+                    tcc_symbols_add(floor);
+                    tcc_symbols_add(fabs);
+                    tcc_symbols_add(ldexp);
+                    tcc_symbols_add(frexp);
+                    tcc_symbols_add(modf);
+                    tcc_symbols_add(fmod);
+
+                    //ctype.h
+                    tcc_symbols_add(isalnum);
+                    tcc_symbols_add(isalpha);
+                    tcc_symbols_add(iscntrl);
+                    tcc_symbols_add(isdigit);
+                    tcc_symbols_add(isgraph);
+                    tcc_symbols_add(islower);
+                    tcc_symbols_add(isleadbyte);
+                    tcc_symbols_add(isprint);
+                    tcc_symbols_add(ispunct);
+                    tcc_symbols_add(isspace);
+                    tcc_symbols_add(isupper);
+                    tcc_symbols_add(isxdigit);
+                    tcc_symbols_add(tolower);
+                    tcc_symbols_add(toupper);
+
+                    //time.h
+                    tcc_symbols_add(time);
+                    tcc_symbols_add(difftime);
+                    tcc_symbols_add(mktime);
+                    tcc_symbols_add(asctime);
+                    tcc_symbols_add(ctime);
+                    tcc_symbols_add(gmtime);
+                    tcc_symbols_add(localtime);
+
+                    //windows.h/winbase.h
+                    tcc_symbols_add(LoadLibraryA);
+                    tcc_symbols_add(LoadLibraryExA);
+                    tcc_symbols_add(GetProcAddress);
+                    tcc_symbols_add(FreeLibrary);
+                    tcc_symbols_add(FindResourceA);
+                    tcc_symbols_add(GetModuleHandleA);
+                    tcc_symbols_add(GetModuleHandleExA);
+
                     if(tcc_relocate(tccstate, TCC_RELOCATE_AUTO) < 0) myexit(QUICKBMS_ERROR_BMS);
                     hlib   = (void *)tccstate;
                     is_tcc = 1;
                     break;
                 }
+                if(callconv && !stricmp(callconv, "python")) {
+                    if(myPython_init() < 0) myexit(QUICKBMS_ERROR_BMS);
+
+                    if(!Py_IsInitialized()) Py_Initialize();
+
+                    PyObject *pModule = PyImport_AddModule("__main__");
+                    if(!pModule) myexit(QUICKBMS_ERROR_BMS);
+
+                    // load the script
+                    pValue = PyRun_String(gmf->data, Py_file_input, PyModule_GetDict(pModule), PyModule_GetDict(pModule));
+                    if(!pValue) {
+                        if(PyErr_Occurred()) PyErr_Print();
+                        myexit(QUICKBMS_ERROR_BMS);
+                    }
+
+                    hlib   = (void *)pModule;
+                    is_pyt = 1;
+                    break;
+                }
 #endif
+                if(callconv && !stricmp(callconv, "lua")) {
+                    lua_State *L = luaL_newstate();
+                    if(!L) myexit(QUICKBMS_ERROR_BMS);
+                    luaL_openlibs(L);
+
+                    if(luaL_loadbuffer(L, gmf->data, gmf->size, "quickbms") != LUA_OK) {
+                        p = (char*)lua_tostring(L, -1); if(p) fprintf(stderr, "luaL_loadbuffer: %s\n", p);
+                        myexit(QUICKBMS_ERROR_BMS);
+                    }
+                    lua_pcall(L, 0, 0, 0);  // This is mandatory or nothing works. Do NOT check the return value!
+                    lua_newtable(L);
+
+                    hlib   = (void *)L;
+                    is_lua = 1;
+                    break;
+                }
+
+                if(hlib) break; // just in case we miss the break above
 
                 hlib = calldll_alloc(   // needed for DEP!
-                    g_memory_file[-get_memory_file(dllname)].data,
-                    g_memory_file[-get_memory_file(dllname)].size,
+                    gmf->data,
+                    gmf->size,
                     0);
 #ifdef WIN32
                 if(hlib && !memcmp(hlib, "MZ", 2)) {
-                    hlib = (void *)MemoryLoadLibrary((void *)hlib, g_memory_file[-get_memory_file(dllname)].size);
+                    hlib = (void *)MemoryLoadLibrary((void *)hlib, gmf->size);
 
                     // try the classical way in case of problems
                     if(!hlib) {
@@ -5819,7 +6193,7 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
                         quickbms_tmpname(&p, NULL, "dll");
                         mystrcpy(fulldlldir, p, PATHSZ);
                         FREE(p);
-                        mydump(fulldlldir, g_memory_file[-get_memory_file(dllname)].data, g_memory_file[-get_memory_file(dllname)].size);
+                        mydump(fulldlldir, gmf->data, gmf->size);
                         hlib = LOADDLL(fulldlldir);
                         is_mem = 0;
                     }
@@ -5834,7 +6208,6 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
                     FREE(p);
                 }
             }
-            if(hlib) break;
         }
         if(!hlib) {
             fprintf(stderr, "\nError: file %s has not been found or cannot be loaded\n", dllname);
@@ -5855,9 +6228,33 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
         dll[di].is_lib = is_lib;
         dll[di].is_mem = is_mem;
         dll[di].is_tcc = is_tcc;
+        dll[di].is_pyt = is_pyt;
+        dll[di].is_lua = is_lua;
         if(is_mem) dll[di].crc = crc;
         else       dll[di].crc = 0;
     }
+
+    // must be done at every call, Lua requires it before getglobal funcname
+    if(is_pyt || is_lua) {
+        // set global variables for interacting with the script... useful?
+        for(i = 0; i < MAX_VARS; i++) {
+            if(!g_variable[i].name) break;
+            p = get_var_ptr_cmd(i, -1, -1, 1, &n);
+            if(is_pyt) {
+                     if(n >= 0)  pValue = PyBuffer_FromReadWriteMemory(p, n);
+                else if(n == -2) pValue = PyFloat_FromDouble(g_variable[i].float64);
+                else             pValue = PyLong_FromLongLong((int)p);
+                PyDict_SetItemString(PyModule_GetDict((PyObject *)hlib), g_variable[i].name, pValue);
+                if(pValue) Py_DECREF(pValue);
+            } else if(is_lua) {
+                     if(n >= 0)  lua_pushlstring((lua_State *)hlib, p, n);
+                else if(n == -2) lua_pushnumber((lua_State *)hlib, g_variable[i].float64);
+                else             lua_pushinteger((lua_State *)hlib, (int)p);
+                lua_setglobal((lua_State *)hlib, g_variable[i].name);
+            }
+        }
+    }
+
     if(!funcaddr) {
         if(funcname && funcname[0]) {
             if(is_lib) {
@@ -5870,14 +6267,15 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
 
                 if(!funcaddr) {
 
+                    for(i = 0; i < 2; i++) {
+                    p = NULL;
                     if(strrchr(funcname, '@')) {
                         // stdcall without @
-                        p = mystrdup_simple(funcname);
+                        spr(&p, "%s%s", (!i) ? "" : "_", funcname);
                         strrchr(p, '@')[0] = 0;
                     } else {
                         // stdcall
-                        p = NULL;
-                        spr(&p, "%s@%d", funcname, (i32)(NUM(0) * sizeof(void *)));
+                        spr(&p, "%s%s@%d", (!i) ? "" : "_", funcname, (i32)(NUM(0) * sizeof(void *)));
                     }
 #ifdef WIN32
                     if(is_mem) {
@@ -5887,8 +6285,15 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
                         funcaddr = GETFUNC(p);
                     FREE(p);
 
+                    if(funcaddr) break;
+                    }
+
                     if(!funcaddr) {
                         quick_var_from_name_check(&funcname, NULL);
+                        if(funcname && funcname[0] && !myisdigit(funcname[0])) {
+                            fprintf(stderr, "\nError: the input library doesn't have the function %s\n", funcname);
+                            myexit_cmd(cmd, QUICKBMS_ERROR_DLL);
+                        }
                         funcaddr = (void *)myatoi(funcname);
                         funcname = NULL;
                         if((void *)funcaddr >= (void *)hlib) {  // is it a fixed address? quite useless
@@ -5901,10 +6306,27 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
                 }
             } else if(is_tcc) {
                 funcaddr = tcc_get_symbol((void *)hlib, funcname);
+            } else if(is_pyt) {
+                funcaddr = (void *)PyObject_GetAttrString((void *)hlib, funcname);
+            } else if(is_lua) {
+                funcaddr = (void *)funcname;
             } else {
                 fprintf(stderr, "\nError: the input library is handled as raw data so can't have a function name\n");
                 myexit_cmd(cmd, QUICKBMS_ERROR_DLL);
             }
+
+        // work-arounds, untested
+        } else if(is_tcc) {
+            //funcaddr = (void *)hlib;
+            funcaddr = tcc_get_symbol((void *)hlib, "main");
+            if(!funcaddr) funcaddr = tcc_get_symbol((void *)hlib, "WinMain");
+        } else if(is_pyt) {
+            //funcaddr = (void *)hlib;
+            funcaddr = (void *)PyObject_GetAttrString((void *)hlib, "__main__");
+        } else if(is_lua) {
+            funcaddr = (void *)"";
+
+        // offset
         } else {
             funcaddr = (void *)((u8 *)(hlib) + funcoff);
         }
@@ -5945,11 +6367,19 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
     argc = NUM(0);
     if(argc < 0) argc = 0;
     if(argc >= MAX_ARGS) argc = MAX_ARGS;
-    memset(&args, 0, sizeof(args));
+    memset(&args,      0, sizeof(args));
+    memset(&args_size, 0, sizeof(args_size));
+    memset(&args_idx,  0, sizeof(args_idx));
 
     // COPY THIS TO run_exe IF YOU MODIFY IT!
     for(i = 0; i < argc; i++) { // wow, looks chaotic?
-        args[i] = get_var_ptr_cmd(cmd, 4 + i, 1);
+        args_idx[i] = CMD.var[4 + i];   // currently used only for float numbers
+        args[i] = get_var_ptr_cmd(-1, cmd, 4 + i, 1, &args_size[i]);
+        if(args_size[i] == -2) {    // only float allowed, this is a work-around
+            args[i] = NULL;
+            float args_float = (float)g_variable[args_idx[i]].float64;
+            memcpy(&args[i], &args_float, MIN(sizeof(args_float), sizeof(args[i])));
+        }
     }
 
     // #INPUT# #OUTPUT#
@@ -6042,6 +6472,21 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
                 CALLDLL_DO_INT3 \
                 ret = function12_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]); \
                 break; } \
+            case 13: { \
+                __##X int (*function12_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
+                CALLDLL_DO_INT3 \
+                ret = function12_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]); \
+                break; } \
+            case 14: { \
+                __##X int (*function12_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
+                CALLDLL_DO_INT3 \
+                ret = function12_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]); \
+                break; } \
+            case 15: { \
+                __##X int (*function12_##X)(void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*,void*) = (void *)funcaddr; \
+                CALLDLL_DO_INT3 \
+                ret = function12_##X(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]); \
+                break; } \
             default: { \
                 fprintf(stderr, "\nError: this tool doesn't support all these arguments for the dll functions ("#X")\n"); \
                 myexit_cmd(cmd, QUICKBMS_ERROR_DLL); \
@@ -6062,6 +6507,9 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
             case 10: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]); break; \
             case 11: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]); break; \
             case 12: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]); break; \
+            case 13: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]); break; \
+            case 14: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]); break; \
+            case 15: CALLDLL_DO_INT3    ret = X##_call(funcaddr, argc, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]); break; \
             default: { \
                 fprintf(stderr, "\nError: this tool doesn't support all these arguments for the dll functions ("#X")\n"); \
                 myexit_cmd(cmd, QUICKBMS_ERROR_DLL); \
@@ -6110,12 +6558,93 @@ int CMD_CallDLL_func(int cmd, u8 *input, int input_size, u8 *output, int output_
         ret = (int)hlib;
     } else if(stristr(callconv, "address")) {
         ret = (int)funcaddr;
+    } else if(is_pyt) {
+        pFunc = (void *)funcaddr;
+        if(pFunc && PyCallable_Check(pFunc)) {
+            if(argc > 0) {
+                pArgs = PyTuple_New(argc);
+                for(i = 0; i < argc; i++) {
+                         if(args_size[i] >= 0)  pValue = PyBuffer_FromReadWriteMemory(args[i], args_size[i]);
+                    else if(args_size[i] == -2) pValue = PyFloat_FromDouble(g_variable[args_idx[i]].float64);
+                    else                        pValue = PyLong_FromLongLong((int)args[i]);
+                    PyTuple_SetItem(pArgs, i, pValue);
+                    if(pValue) Py_DECREF(pValue);
+                }
+            } else {
+                pArgs = NULL;
+            }
+
+            pValue = PyObject_CallObject(pFunc, pArgs);
+            if(!pValue) { // correct
+                if(PyErr_Occurred()) PyErr_Print();
+                myexit(QUICKBMS_ERROR_BMS);
+            }
+
+#ifdef QUICKBMS64
+            PyErr_Clear();  ret = PyLong_AsLongLong(pValue);    if(PyErr_Occurred())
+#endif
+            {
+            PyErr_Clear();  ret = PyLong_AsLong(pValue);        if(PyErr_Occurred()) {
+            PyErr_Clear();  ret = PyInt_AsLong(pValue);         if(PyErr_Occurred()) {  // useless
+
+            // the following float/double code works perfectly but PyLong_AsLong will work before it and NEVER put it before the others
+            PyErr_Clear();  double retd = PyFloat_AsDouble(pValue);
+#ifdef QUICKBMS64
+            ret = 0;                            memcpy(&ret, &retd, MIN(sizeof(ret), sizeof(retd)));
+#else
+            ret = 0;    float   retf = retd;    memcpy(&ret, &retf, MIN(sizeof(ret), sizeof(retf)));
+#endif
+                                                                if(PyErr_Occurred()) {
+
+            PyErr_Clear();
+                ret = 0;
+
+                pTmp = PyByteArray_FromObject(pValue);
+                if(pTmp) ret = (int)PyByteArray_AsString(pTmp);
+
+                if(!ret) ret = (int)PyString_AsString(pValue);  // just fail-safe
+            }
+            }
+            }
+            }
+            Py_DECREF(pValue);
+
+            if(pArgs) Py_DECREF(pArgs);
+            PyErr_Clear();  // mandatory, mainly for Py*_As* that raise exceptions
+        }
+    } else if(is_lua) {
+        lua_getglobal((lua_State *)hlib, (const char *)funcaddr); // funcaddr is funcname
+        for(i = 0; i < argc; i++) {
+                 if(args_size[i] >= 0)  lua_pushlstring((lua_State *)hlib, args[i], args_size[i]);
+            else if(args_size[i] == -2) lua_pushnumber((lua_State *)hlib, g_variable[args_idx[i]].float64);
+            else                        lua_pushinteger((lua_State *)hlib, (int)args[i]);
+        }
+        if(lua_pcall((lua_State *)hlib, argc, 1, 0) != LUA_OK) {
+            p = (char*)lua_tostring((lua_State *)hlib, -1); if(p) fprintf(stderr, "lua_pcall: %s\n", p);
+            myexit(QUICKBMS_ERROR_BMS);
+        }
+        // what if there is no return value?
+        size_t  lua_ret = 0;
+             if(lua_isboolean       ((lua_State *)hlib, -1))  { ret = (int)lua_toboolean    ((lua_State *)hlib, -1); lua_ret = -1; }
+        else if(lua_iscfunction     ((lua_State *)hlib, -1))    ret = (int)lua_tocfunction  ((lua_State *)hlib, -1);
+        else if(lua_isfunction      ((lua_State *)hlib, -1))    ret = (int)lua_tocfunction  ((lua_State *)hlib, -1);
+        else if(lua_islightuserdata ((lua_State *)hlib, -1))    ret = (int)lua_touserdata   ((lua_State *)hlib, -1);
+        else if(lua_isnil           ((lua_State *)hlib, -1))    ret = (int)lua_topointer    ((lua_State *)hlib, -1);
+        else if(lua_isnone          ((lua_State *)hlib, -1))  { ret = (int)lua_tointeger    ((lua_State *)hlib, -1); lua_ret = -1; }
+        else if(lua_isnoneornil     ((lua_State *)hlib, -1))  { ret = (int)lua_tointeger    ((lua_State *)hlib, -1); lua_ret = -1; }
+        else if(lua_isnumber        ((lua_State *)hlib, -1))  { ret = (int)lua_tonumber     ((lua_State *)hlib, -1); lua_ret = -1; }
+        else if(lua_isstring        ((lua_State *)hlib, -1))    ret = (int)lua_tolstring    ((lua_State *)hlib, -1, &lua_ret);  // lua_topointer doesn't work
+        else if(lua_istable         ((lua_State *)hlib, -1))    ret = (int)lua_topointer    ((lua_State *)hlib, -1);    // wrong because table is MULTI_RET
+        else if(lua_isthread        ((lua_State *)hlib, -1))    ret = (int)lua_topointer    ((lua_State *)hlib, -1);
+        else if(lua_isuserdata      ((lua_State *)hlib, -1))    ret = (int)lua_touserdata   ((lua_State *)hlib, -1);
+        // if we call lua_pop the GC is going to destroy the return value... yeah, this is wrong
+        if(lua_ret < 0) lua_pop((lua_State *)hlib, 1);
     } else {
         fprintf(stderr, "\nError: calling convention %s not supported\n", callconv);
         myexit_cmd(cmd, QUICKBMS_ERROR_DLL);
     }
 
-    if(!VARVAR(3).constant) {
+    if((CMD.var[3] >= 0) && !VARVAR(3).constant) {
         if(CMD.num[3] && !CMD_CallDLL_quick_check_memory((void *)ret)) {
             add_var(CMD.var[3], NULL, (void *)ret, 0, -1);  // string only!
         } else {
@@ -6285,6 +6814,35 @@ u8 *CMD_Label_func(int cmd, u8 *requested_label) {
     }
     return label;
 }
+
+
+
+int CMD_DirectoryExists_func(int cmd) {
+    u8      *folder;
+
+    folder = VAR(1);
+    if(check_is_dir(folder)) {
+        add_var(CMD.var[0], NULL, NULL, 1, sizeof(int));
+    } else {
+        add_var(CMD.var[0], NULL, NULL, 0, sizeof(int));
+    }
+    return 0;
+}
+
+
+
+int CMD_FEof_func(int cmd) {
+    int     fd;
+
+    fd   = FILEZ(1);
+    if(myftell(fd) >= myfilesize(fd)) {
+        add_var(CMD.var[0], NULL, NULL, 1, sizeof(int));
+    } else {
+        add_var(CMD.var[0], NULL, NULL, 0, sizeof(int));
+    }
+    return 0;
+}
+
 
 
 

@@ -250,7 +250,8 @@ int get_codepage_from_string(u8 *name) {
 
 
 
-int utf8_to_utf16_chr(u8 *in, int insz, wchar_t *wc, int handle_endianess, int mycodepage) {
+// not compatible with big endian utf32
+int _utf8_to_utf16_chr(u8 *in, int insz, wchar_t *wc, int handle_endianess, int mycodepage, int utf32) {
     int     len = -1;
     wchar_t t16;
 
@@ -296,16 +297,19 @@ doit:
             old_endian = g_endian;
             if(ic) iconv_close(ic);
             //ic = iconv_open((g_endian == MYLITTLE_ENDIAN) ? "UTF-16LE" : "UTF-16BE", "UTF-8");   // utf8 to utf16
-            ic = iconv_open("UTF-16LE", "UTF-8");   // correct, not tested on big endian CPU
+            ic = iconv_open(utf32 ? "UTF-32LE" : "UTF-16LE", "UTF-8");   // correct, not tested on big endian CPU
         }
         if(ic != (iconv_t)(-1)) {
+            u16     wc16    = 0;
+            u32     wc32    = 0;
             size_t  il  = insz,
-                    ol  = sizeof(u16) /*sizeof(wchar_t)*/;
+                    ol  = utf32 ? sizeof(wc32) : sizeof(wc16) /*sizeof(wchar_t)*/;
             char    *ip = in,
-                    *op = (void *)wc;
+                    *op = utf32 ? (void *)&wc32 : (void *)&wc16;
             if(iconv(ic, &ip, &il, &op, &ol) >= 0) {
                 len = ip - (char *)in;
             }
+            *wc = utf32 ? wc32 : wc16;
         }
     }
 #endif
@@ -317,24 +321,51 @@ doit:
         *wc = in[0];
     }
     if(handle_endianess) {
-        if(g_endian == MYLITTLE_ENDIAN) *wc = swap16le(*wc);
-        else                            *wc = swap16be(*wc);
+        if(utf32) {
+            // endianess does NOT work with utf32 because wc is wchar_t (16 bit on Windows)
+            if(g_endian == MYLITTLE_ENDIAN) *wc = swap32le(*wc);
+            else                            *wc = swap32be(*wc);
+        } else {
+            if(g_endian == MYLITTLE_ENDIAN) *wc = swap16le(*wc);
+            else                            *wc = swap16be(*wc);
+        }
     }
     return len; // input size
 }
 
+int utf8_to_utf16_chr(u8 *in, int insz, u16 *wc, int handle_endianess, int mycodepage) {
+    wchar_t wc_ret;
+    int ret = _utf8_to_utf16_chr(in, insz, &wc_ret, handle_endianess, mycodepage, 0);
+    if(wc) *wc = wc_ret;
+    return ret;
+}
+
+int utf8_to_utf32_chr(u8 *in, int insz, u32 *wc, int handle_endianess, int mycodepage) {
+    wchar_t wc_ret;
+    int ret = _utf8_to_utf16_chr(in, insz, &wc_ret, handle_endianess, mycodepage, 1);
+    if(wc) *wc = wc_ret;
+    return ret;
+}
 
 
-int utf16_to_utf8_chr(wchar_t wc, u8 *out, int outsz, int handle_endianess, int mycodepage) {
+
+int _utf16_to_utf8_chr(u32 wc, u8 *out, int outsz, int handle_endianess, int mycodepage, int utf32) {
     int     len = -1;
+    wchar_t wct;
 
     if(handle_endianess) {
-        if(g_endian == MYLITTLE_ENDIAN) wc = swap16le(wc);
-        else                            wc = swap16be(wc);
+        if(utf32) {
+            if(g_endian == MYLITTLE_ENDIAN) wc = swap32le(wc);
+            else                            wc = swap32be(wc);
+        } else {
+            if(g_endian == MYLITTLE_ENDIAN) wc = swap16le(wc);
+            else                            wc = swap16be(wc);
+        }
     }
+    wct = wc;
 #ifdef WIN32
     if(mycodepage < 0) mycodepage = CP_UTF8;
-    len = WideCharToMultiByte(mycodepage, 0, (void *)&wc, 1 /*chars not bytes!*/, out, outsz, NULL, NULL);
+    len = WideCharToMultiByte(mycodepage, 0, (void *)&wct, 1 /*chars not bytes!*/, out, outsz, NULL, NULL);
     if(len > outsz) len = -1;
 #endif
 #ifdef USE_LIBICONV
@@ -345,27 +376,38 @@ int utf16_to_utf8_chr(wchar_t wc, u8 *out, int outsz, int handle_endianess, int 
             old_endian = g_endian;
             if(ic) iconv_close(ic);
             //ic = iconv_open("UTF-8", (g_endian == MYLITTLE_ENDIAN) ? "UTF-16LE" : "UTF-16BE");   // utf16 to utf8
-            ic = iconv_open("UTF-8", "UTF-16LE"); // wc is already endian-converted, so no need of LE/BE, not tested on big endian CPU
+            ic = iconv_open("UTF-8", utf32 ? "UTF-32LE" : "UTF-16LE"); // wct is already endian-converted, so no need of LE/BE, not tested on big endian CPU
         }
         if(ic != (iconv_t)(-1)) {
-            size_t  il  = sizeof(u16) /*sizeof(wchar_t)*/,
+            u16     wc16    = 0;
+            u32     wc32    = 0;
+            size_t  il  = utf32 ? sizeof(wc32) : sizeof(wc16) /*sizeof(wchar_t)*/,
                     ol  = outsz;
-            char    *ip = (void *)&wc,
+            char    *ip = utf32 ? (void *)&wc32 : (void *)&wc16,
                     *op = out;
             if(iconv(ic, &ip, &il, &op, &ol) >= 0) {
                 len = op - (char *)out;
             }
+            wct = utf32 ? wc32 : wc16;
         }
     }
 #endif
     if(len <= 0) {
-        len = wctomb(out, wc);
+        len = wctomb(out, wct);
     }
     if(len <= 0) {
         len = 1;
-        out[0] = wc;
+        out[0] = wct;
     }
     return len; // output size
+}
+
+int utf16_to_utf8_chr(u16 wc, u8 *out, int outsz, int handle_endianess, int mycodepage) {
+    return _utf16_to_utf8_chr(wc, out, outsz, handle_endianess, mycodepage, 0);
+}
+
+int utf32_to_utf8_chr(u32 wc, u8 *out, int outsz, int handle_endianess, int mycodepage) {
+    return _utf16_to_utf8_chr(wc, out, outsz, handle_endianess, mycodepage, 1);
 }
 
 
@@ -479,12 +521,14 @@ int utf8_to_utf16(u8 *in, int insz, u8 *out, int outsz, int rev) {
 
 
 // tested with little and big endian in reimport mode (SLog)
-u8 *set_utf8_to_unicode(u8 *input, int input_size, int *ret_size) {
+u8 *_set_utf8_to_unicode(u8 *input, int input_size, int *ret_size, int utf32) {
     static int  buffsz  = 0;
     static u8   *buff   = NULL;
-    wchar_t     wc;
+    u32         wc32;
+    u16         wc16;
     int         i,
-                t;
+                t,
+                wcsz    = utf32 ? sizeof(wc32) : sizeof(wc16);
     u8          *p,
                 *l;
 
@@ -494,21 +538,24 @@ u8 *set_utf8_to_unicode(u8 *input, int input_size, int *ret_size) {
     l = input + input_size;
     i = 0;
     while(p < l) {
-        t = utf8_to_utf16_chr(p, l - p, &wc, 1, g_codepage);
+        if(utf32)   t = utf8_to_utf32_chr(p, l - p, &wc32, 1, g_codepage);
+        else        t = utf8_to_utf16_chr(p, l - p, &wc16, 1, g_codepage);
         if(t <= 0) break;
         p += t;
-        if(!wc) break;
-        if((i + sizeof(u16)) >= buffsz) {
-            buffsz += (STRINGSZ * sizeof(u16));
-            buff = realloc(buff, buffsz + sizeof(u16));
+        //if(!wc) break;    // give freedom to have 0x00 in SLog unicode
+        if((i + wcsz) >= buffsz) {
+            buffsz += (STRINGSZ * wcsz);
+            buff = realloc(buff, buffsz + wcsz);
             if(!buff) STD_ERR(QUICKBMS_ERROR_MEMORY);
         }
-        *(u16 *)(buff + i) = wc;
-        i += sizeof(u16);
+        if(utf32)   *(u32 *)(buff + i) = wc32;
+        else        *(u16 *)(buff + i) = wc16;
+        i += wcsz;
     }
     if(ret_size) *ret_size = i;
-    //buff = realloc(buff, i + sizeof(u16));    // do NOT activate or will crash
-    *(u16 *)(buff + i) = 0;
+    //buff = realloc(buff, i + wcsz);    // do NOT activate or will crash
+    if(utf32)   *(u32 *)(buff + i) = 0;
+    else        *(u16 *)(buff + i) = 0;
 
     //static const int    set_utf8_to_unicode_zeroes = 4; // ???
     //buff = realloc(buff, i + set_utf8_to_unicode_zeroes);
@@ -517,23 +564,37 @@ u8 *set_utf8_to_unicode(u8 *input, int input_size, int *ret_size) {
     return buff;
 }
 
+u8 *set_utf8_to_unicode(u8 *input, int input_size, int *ret_size) {
+    return _set_utf8_to_unicode(input, input_size, ret_size, 0);
+}
+
+u8 *set_utf8_to_unicode32(u8 *input, int input_size, int *ret_size) {
+    return _set_utf8_to_unicode(input, input_size, ret_size, 1);
+}
 
 
-u8 *set_unicode_to_utf8(u8 *input, int input_size, int *ret_size) {
+
+u8 *_set_unicode_to_utf8(u8 *input, int input_size, int *ret_size, int utf32) {
     static int  buffsz  = 0;
     static u8   *buff   = NULL;
     int     i,
             x,
             c,
             len,
-            unicnt      = 0;
-    u16     wc          = 0;
+            unicnt  = 0,
+            wcsz    = utf32 ? sizeof(u32) : sizeof(u16),
+            unicode = utf32 ? -1 : 0;   // compatible with fgetss
+    u32     wc      = 0;
     u8      *p,
             *l;
     u8      tmp[32];
 
     if(input_size < 0) {
-        for(input_size = 0; *(u16 *)(input + input_size); input_size += 2);
+        if(utf32) {
+            for(input_size = 0; *(u32 *)(input + input_size); input_size += sizeof(u32));
+        } else {
+            for(input_size = 0; *(u16 *)(input + input_size); input_size += sizeof(u16));
+        }
     }
 
     p = input;
@@ -546,22 +607,17 @@ u8 *set_unicode_to_utf8(u8 *input, int input_size, int *ret_size) {
         // no c check here
 
         // shared with fgetss
-        if(!unicnt) wc = 0;
-
-        if(g_endian == MYLITTLE_ENDIAN) {
-            if(unicnt) wc |= (c << 8);
-            else       wc |= c;
-        } else {
-            if(unicnt) wc |= c;
-            else       wc |= (c << 8);
-        }
-        unicnt++;
-        if(unicnt < 2) continue;
-        unicnt = 0;
-
-        if(!wc) break;
-
-        len = utf16_to_utf8_chr(wc, tmp, sizeof(tmp), 0, g_codepage);
+            if(!unicnt) wc = 0;
+            if(g_endian == MYLITTLE_ENDIAN) {
+                wc |= (c << (8 * unicnt));
+            } else {
+                wc |= (c << (8 * (wcsz - (unicnt + 1))));
+            }
+            unicnt++;
+            if(unicnt < wcsz) continue;
+            unicnt = 0;
+            if(unicode > 0) len = utf16_to_utf8_chr(wc, tmp, sizeof(tmp), 0, g_codepage);
+            else            len = utf32_to_utf8_chr(wc, tmp, sizeof(tmp), 0, g_codepage);
 
         //if((len == 1) && (tmp[0] == 0x00)) break;
         for(x = 0; x < len; x++) if(tmp[x]) break;
@@ -584,6 +640,14 @@ u8 *set_unicode_to_utf8(u8 *input, int input_size, int *ret_size) {
     //buff = realloc(buff, i + set_unicode_to_utf8_zeroes);
     //memset(buff + i, 0, set_unicode_to_utf8_zeroes);
     return buff;
+}
+
+u8 *set_unicode_to_utf8(u8 *input, int input_size, int *ret_size) {
+    return _set_unicode_to_utf8(input, input_size, ret_size, 0);
+}
+
+u8 *set_unicode32_to_utf8(u8 *input, int input_size, int *ret_size) {
+    return _set_unicode_to_utf8(input, input_size, ret_size, 1);
 }
 
 

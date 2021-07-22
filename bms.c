@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2018 Luigi Auriemma
+    Copyright 2009-2019 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -423,6 +423,16 @@ redo:
                 }
                 break;
             }
+            case CMD_DirectoryExists: {
+                if(nop) break;
+                if(CMD_DirectoryExists_func(cmd) < 0) goto quit_error;
+                break;
+            }
+            case CMD_FEof: {
+                if(nop) break;
+                if(CMD_FEof_func(cmd) < 0) goto quit_error;
+                break;
+            }
             case CMD_NOP: {
                 if(nop) break;
                 // no operation, do nothing
@@ -614,15 +624,23 @@ redo:
         if(line[0] == ';') break;
         if(line[0] == '\'') {     // C char like 'A' or '\x41'
             line++;
-            cstring(line, tmp, 1, &c);
-            for(p = line + c; *p; p++) {
+            strcpy(tmpchars[argi], "0x");
+            i = 0;
+            for(p = line; *p; p += c) {
+                c = 1;
                 if((p[0] == '\\') && (p[1] == '\'')) {
-                    p++;
+                    c = 2;
                     continue;
                 }
                 if(*p == '\'') break;
+
+                if(i < sizeof(int)) {
+                    cstring(p, tmp, 1, &c);
+                    sprintf(tmpchars[argi] + strlen(tmpchars[argi]), "%02x", tmp[0]);
+                    i++;
+                }
             }
-            sprintf(tmpchars[argi], "0x%02x", tmp[0]);
+            if(!i) strcpy(tmpchars[argi], "0");
             argument[argi] = tmpchars[argi];
 
         } else if(line[0] == '\"') {  // string
@@ -649,10 +667,14 @@ goto_multiline:
                     if(!c) goto redo;
                     break;
                 }
-                if((p[0] == '\\') && (p[1] == '\"') && p[2]) {  // for working with "c:\\"
-                    p++;
-                    *s++ = *p;
-                    continue;
+                // THIS IS A WORK-AROUND because there is no clear definition of delimiters
+                // examples: "c:\\\"x" "c:\\\"x" "c:\\" "c:\" and multi lines with \" at the end of the line
+                if((p[0] == '\\') && (p[1] == '\"') /*&& p[2]*/) {  // for working with "c:\\"
+                    if((!multiline && p[2]) || multiline) {
+                        p++;
+                        *s++ = *p;
+                        continue;
+                    }
                 }
                 *s++ = *p;
             }
@@ -1249,7 +1271,7 @@ int c_structs(u8 *argument[MAX_ARGS + 1], int argc, int *ret_cmd) {
             case BMS_TYPE_LONGLONG: sprintf(tmp, "%.*s*8", sizeof(tmp) - 4, arrayp);    break;
             case BMS_TYPE_FLOAT:    sprintf(tmp, "%.*s*4", sizeof(tmp) - 4, arrayp);    break;
             case BMS_TYPE_DOUBLE:   sprintf(tmp, "%.*s*8", sizeof(tmp) - 4, arrayp);    break;
-            default:            sprintf(tmp, "%.*s*4", sizeof(tmp) - 4, arrayp);    break;
+            default:                sprintf(tmp, "%.*s*4", sizeof(tmp) - 4, arrayp);    break;
         }
         ARG[2] = tmp;
         argc = 2;
@@ -1267,7 +1289,7 @@ int c_structs(u8 *argument[MAX_ARGS + 1], int argc, int *ret_cmd) {
             case BMS_TYPE_FLOAT:    sprintf(tmp, "float");      break;
             case BMS_TYPE_DOUBLE:   sprintf(tmp, "double");     break;
             case BMS_TYPE_VARIABLE: sprintf(tmp, "variable");   break;
-            default:            sprintf(tmp, "long");       break;
+            default:                sprintf(tmp, "long");       break;
         }
         ARG[2] = tmp;
         argc = 2;
@@ -1275,6 +1297,8 @@ int c_structs(u8 *argument[MAX_ARGS + 1], int argc, int *ret_cmd) {
         goto quit;
 
 quit:
+    if(argc < 0) goto quit2;
+
     ARG[argc + 1] = "";
     if(put) {
         cmd = *ret_cmd;
@@ -1287,9 +1311,18 @@ quit:
 quit2:
     // argument[] must be allocated
     for(i = 0; i < MAX_ARGS; i++) {
-        // first strdup and then free!
-        if(argument[i]) argument[i] = mystrdup_simple(argument[i]);
-        FREE(bck_argument[i]);
+        if(argument[i] != bck_argument[i]) {
+            // first strdup and then free!
+            if(argument[i]) argument[i] = mystrdup_simple(argument[i]);
+            // the following is correct: j=i, xalloc and ARG[i+1]=ARG[i]
+            int j;
+            for(j = i; j < MAX_ARGS; j++) {
+                if(argument[j] == bck_argument[i]) break;
+            }
+            if(j >= MAX_ARGS) {
+                FREE(bck_argument[i]);
+            }
+        }
     }
     return(argc);
 }
@@ -1300,27 +1333,36 @@ int calc_quickbms_version(u8 *version) {
     int     n,
             len,
             ret,
-            seq;
-    u8      *p;
+            seq,
+            plen;
+    u8      *p,
+            *filter_in_files_tmp = NULL;
 
     if(!version) return 0;
     version = skip_delimit(version);
     ret = 0;
     seq = 24;
-    for(p = version; *p; p += len) {
+    plen = strlen(version); // just in case
+    for(p = version; *p && (p < (version + plen)); p += len) {
+        len = 1;
         if(*p == '.') {
-            len = 1;
             seq -= 8;
             //if(seq < 0) break;
         } else if(strchr(" \t\r\n,;|(){}[]", *p)) {
-            len = 1;
+            // do nothing
         } else if(strchr("-/", *p)) {
-            len = 1;    // skip options
             if((p[1] == '6') && (p[2] == '4')) {    // "64"
                 #ifdef QUICKBMS64
                 #else
                     fprintf(stderr,
                         "- the script requires the usage of quickbms_4gb_files.exe\n");
+                    myexit(QUICKBMS_ERROR_BMS);
+                #endif
+                len += 2;
+            } else if((p[1] == '3') && (p[2] == '2')) { // "32"
+                #ifdef QUICKBMS64
+                    fprintf(stderr,
+                        "- the script requires the usage of quickbms.exe\n");
                     myexit(QUICKBMS_ERROR_BMS);
                 #endif
                 len += 2;
@@ -1346,12 +1388,18 @@ int calc_quickbms_version(u8 *version) {
                     case 'D': g_quickbms_outname        = -1;   break;
                     case 'e': g_ignore_comp_errors      = 1;    break;  // mainly for debugging
                     case 'J': g_force_cstring           = 1;    break;
+                    case 'F':
+                        p += 2; // -F
+                        while(*p && (*p <= ' ')) p++;
+                        append_list(&filter_in_files_tmp, p);
+                        len = -1; /*lame break, this is experimental since , and ; are already handled as separators*/
+                        break;
                     default: len--; /* to fix the next len++ */ break;
                 }
+                if(len < 0) break;
                 len++;
             }
         } else if(((*p >= 'a') && (*p <= 'z')) || ((*p >= 'A') && (*p <= 'Z'))) {
-            len = 1;
             if(seq >= 0) {
                 ret += *p;
             }
@@ -1362,6 +1410,11 @@ int calc_quickbms_version(u8 *version) {
                 ret += n << seq;
             }
         }
+        if(len < 0) break;  // just in case...
+    }
+    if(filter_in_files_tmp) {
+        build_filter(&g_filter_in_files, filter_in_files_tmp);
+        FREE(filter_in_files_tmp)
     }
     return ret;
 }
@@ -1414,6 +1467,7 @@ int set_uint_flex(int cmd, u8 *name, u8 *arg) {
 
 void set_cmd_args_ptr(int cmd, int idx, u8 *arg) {
     CMD.num[idx] = 0;                       // &var disabled
+    if(!arg) return;
     if((arg[0] == '&') || (arg[0] == '*')) {
         CMD.num[idx] = 1;                   // &var enabled
         arg++;
@@ -2446,7 +2500,7 @@ redo:
             CMD.var[2] = parse_bms_add_var(3);                  // filesize
             if(ARG[4] && !g_filter_files) {
                 tmp = mystrdup_simple(ARG[4]);
-                g_filter_in_files = build_filter(tmp);
+                build_filter(&g_filter_in_files, tmp);
                 FREE(tmp)
             }
 
@@ -2580,6 +2634,57 @@ redo:
             CMD.type   = CMD_Label;
             mystrdup(&CMD.str[0], ARG[1]);
 
+        } else if(!strnicmp(ARG[0], "ConvertBytesTo", 14) && (argc >= 2)) {
+            CMD.type   = CMD_GetVarChr;
+            CMD.var[0] = parse_bms_add_var(1);
+            CMD.var[1] = add_var(0, "0", NULL, 0, -2);
+            CMD.var[2] = parse_bms_add_var(2);
+            CMD.num[3] = add_datatype(ARG[0] + 14);
+
+        } else if(!stricmp(ARG[0], "ConvertDataToBytes") && (argc >= 2)) {
+            CMD.type   = CMD_PutVarChr;
+            CMD.var[0] = parse_bms_add_var(1);
+            CMD.var[1] = add_var(0, "0", NULL, 0, -2);
+            CMD.var[2] = parse_bms_add_var(2);
+            CMD.num[3] = add_datatype("long");  // default
+
+        } else if(!stricmp(ARG[0], "DirectoryExists") && (argc >= 2)) {
+            CMD.type   = CMD_DirectoryExists;
+            CMD.var[0] = parse_bms_add_var(1);  // output var
+            CMD.var[1] = parse_bms_add_var(2);  // folder
+
+        } else if(!stricmp(ARG[0], "FEof") && (argc >= 1)) {
+            CMD.type   = CMD_FEof;
+            CMD.var[0] = parse_bms_add_var(1);  // output var
+            CMD.num[1] = myatoifile(ARG[2]);    // optional file number
+
+        } else if(!stricmp(ARG[0], "FSkip") && (argc >= 1)) {
+            CMD.type   = CMD_GoTo;
+            CMD.var[0] = parse_bms_add_var(1);                  // pos
+            CMD.num[1] = myatoifile(ARG[2]);                    // file
+            CMD.num[2] = SEEK_CUR;
+
+        } else if(
+            (   !stricmp(ARG[0], "ReadByte")   || !stricmp(ARG[0], "ReadDouble") || !stricmp(ARG[0], "ReadFloat")  ||
+                !stricmp(ARG[0], "ReadHFloat") || !stricmp(ARG[0], "ReadInt")    || !stricmp(ARG[0], "ReadInt64")  ||
+                !stricmp(ARG[0], "ReadQuad")   || !stricmp(ARG[0], "ReadShort")  || !stricmp(ARG[0], "ReadUByte")  ||
+                !stricmp(ARG[0], "ReadUInt")   || !stricmp(ARG[0], "ReadUInt64") || !stricmp(ARG[0], "ReadUQuad")  ||
+                !stricmp(ARG[0], "ReadUShort") || !stricmp(ARG[0], "ReadLine")   || !stricmp(ARG[0], "ReadString") ||
+                !stricmp(ARG[0], "ReadDString") // added by me
+            ) && (argc >= 1)) {
+            if(argc >= 2) {
+                CMD.type   = CMD_GoTo;
+                CMD.var[0] = parse_bms_add_var(2);
+                CMD.num[1] = myatoifile(ARG[3]);
+                CMD.num[2] = SEEK_SET;
+            }
+            CMD.type   = CMD_Get;
+            CMD.var[0] = parse_bms_add_var(1);
+            CMD.num[1] = add_var(0, ARG[0] + 4, NULL, 0, -2);
+            CMD.num[2] = myatoifile(ARG[3]);
+
+
+
         // last part, put your instructions above this line
 
         } else if((argc == 0) && (strchr(ARG[0], ':'))) {
@@ -2680,12 +2785,6 @@ void bms_init(int reinit) {
         //g_force_overwrite       = 0;
         //g_force_rename          = 0;
         g_compression_type      = COMP_ZLIB;
-        g_filexor_pos           = NULL;
-        g_filexor_size          = 0;
-        g_filerot_pos           = NULL;
-        g_filerot_size          = 0;
-        g_filecrypt_pos         = NULL;
-        g_filecrypt_size        = 0;
         g_comtype_dictionary_len= 0;
         g_comtype_scan          = 0;
         g_encrypt_mode          = 0;
@@ -2693,9 +2792,9 @@ void bms_init(int reinit) {
         g_temporary_file_used   = 0;
         g_mex_default           = 0;
         g_script_uses_append    = 0;
-        g_filexor               = NULL;
-        g_filerot               = NULL;
-        g_filecrypt             = NULL;
+        memset(&g_filexor,   0, sizeof(g_filexor));
+        memset(&g_filerot,   0, sizeof(g_filerot));
+        memset(&g_filecrypt, 0, sizeof(g_filecrypt));
         g_comtype_dictionary    = NULL;
         //EXTRCNT_idx             = 0;
         //BytesRead_idx           = 0;

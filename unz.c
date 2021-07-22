@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2018 Luigi Auriemma
+    Copyright 2009-2019 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -447,6 +447,9 @@ int ncompress_main(unsigned char *in, int insz, unsigned char *out, int outsz, i
 int bcm_compress(unsigned char *in, int insz, unsigned char *out);
 int bcm_decompress(unsigned char *in, int insz, unsigned char *out);
 #include "included/deulz.c"
+int mppc_unpack(unsigned char *in, int insz, unsigned char *out, int outsz, int level);
+int mppc_pack(unsigned char *in, int insz, unsigned char *out, int outsz, int level);
+size_t ALLZ_Decode(u8** ptr_dst, u8* src, size_t srcSize);
 
 
 
@@ -3573,7 +3576,8 @@ int slz_triace(unsigned char *in, int insz, unsigned char **ret_out, int outsz, 
             }
         }
     }
-    u8      *slz = in;
+    u8      *slz = in,
+            *slz_end = in + insz;
 
     u8      *raw = out,
             *raw_end = out + outsz;
@@ -3587,14 +3591,17 @@ int slz_triace(unsigned char *in, int insz, unsigned char **ret_out, int outsz, 
       flags = 0;
       while (raw < raw_end) {
         if ((flags >>= 1) <= 0xFFFF) {
+          if(slz >= slz_end) break;
           flags = 0x00FF0000 | *slz++;
           if (mode == 3) flags |= 0xFF000000 | (*slz++ << 8);
         }
 
         if (flags & 1) {
+          if(slz >= slz_end) break;
           *raw++ = *slz++;
           if (mode == 3) *raw++ = *slz++;
         } else {
+          if((slz + 2) > slz_end) break;
           pos = *slz++;
           len = *slz++;
           if ((mode == 2) && (len >= 0xF0)) {
@@ -3602,6 +3609,7 @@ int slz_triace(unsigned char *in, int insz, unsigned char **ret_out, int outsz, 
               len = (len & 0xF) + 3;
             } else {
               len = pos + 0x13;
+              if(slz >= slz_end) break;
               pos = *slz++;
             }
             while (len--) *raw++ = pos;
@@ -3612,8 +3620,9 @@ int slz_triace(unsigned char *in, int insz, unsigned char **ret_out, int outsz, 
               len = (len - 1) << 1;
               pos <<= 1;
             }
-            //while (len--) *raw++ = *(raw - pos);
+            if(!pos) break; // impossible
             while (len--) {
+                if((raw - pos) < out) break;    // invalid stream
                 *raw = *(raw - pos);
                 raw++;
             }
@@ -4058,6 +4067,18 @@ int undragonballz(u8 *in, int insz, u8 *out) {
         }
     }
     return(dst - out);
+}
+
+
+
+int undragonballz_compress_fake(u8 *in, int insz, u8 *out) {
+    unsigned char   *inl = in + insz;
+    unsigned char   *o = out;
+    while(in < inl) {
+        *o++ = 1 << 1;  // flags
+        *o++ = *in++;
+    }
+    return o - out;
 }
 
 
@@ -9093,9 +9114,9 @@ int mzx0_decompress(unsigned char *f, int fsz, unsigned char *dout, int exlen) {
         if((flags & 0x03) == 0) {
             for(i = 0; i < ((flags / 4) + 1); i++) {
                 if(offset >= exlen) break;
-                dout[offset  ] = last1;
-                dout[offset+1] = last2;
-                offset += 2;
+                dout[offset++] = last1;
+                if(offset >= exlen) break;
+                dout[offset++] = last2;
             }
 
         } else if((flags & 0x03) == 1) {
@@ -9104,30 +9125,32 @@ int mzx0_decompress(unsigned char *f, int fsz, unsigned char *dout, int exlen) {
             k = *f++;
             k = 2 * (k+1);
             for(i = 0; i < ((flags / 4) + 1); i++) {
-                if(offset >= exlen) break;
                 // read two previous bytes in sliding
+                if(offset >= exlen) break;
                 dout[offset] = dout[offset - k];
                 offset += 1;
+                if(offset >= exlen) break;
                 dout[offset] = dout[offset - k];
                 offset += 1;
             }
-            last1 = dout[offset-2];
-            last2 = dout[offset-1];
+            last1 = ((offset-2)<0) ? 0 : dout[offset-2];
+            last2 = ((offset-1)<0) ? 0 : dout[offset-1];
 
         } else if((flags & 0x03) == 2) {
             if(offset >= exlen) break;
-            dout[offset  ] = last1 = ringbuf[2 * ((flags / 4))];
-            dout[offset+1] = last2 = ringbuf[2 * ((flags / 4)) + 1];
-            offset += 2;
+            dout[offset++] = last1 = ringbuf[2 * ((flags / 4))];
+            if(offset >= exlen) break;
+            dout[offset++] = last2 = ringbuf[2 * ((flags / 4)) + 1];
 
         } else {
             for(i = 0; i < ((flags / 4) + 1); i++) {
-                if(offset >= exlen) break;
                 if(f >= max)
                     break;
+                if(offset >= exlen) break;
                 last1 = ringbuf[ring_wpos] = dout[offset] = *f++;
                 ring_wpos += 1;
                 offset += 1;
+                if(offset >= exlen) break;
                 last2 = ringbuf[ring_wpos] = dout[offset] = *f++;
                 ring_wpos += 1;
                 offset += 1;
@@ -9515,4 +9538,251 @@ LABEL_90:
   return v5 - Dst;
 }
 
+
+
+// by akderebur
+// https://zenhax.com/viewtopic.php?p=45696#p45696
+void SLZ3_Decode(unsigned char* in, char* out_buffer) {
+      int v3 = 0; // ebp
+      uint8_t *v5 = NULL; // r13
+      int i = 0; // edx
+      bool v160 = false; // zf
+      uint8_t *DataS = NULL; // rbx
+      int64_t v1217 = 0; // r12
+      int v1218 = 0; // er15
+      int v1238 = 0; // eax
+      int v1239 = 0; // er13
+      int v1240 = 0; // eax
+      int v1241 = 0; // er12
+      int v1242 = 0; // ecx
+      int v1243 = 0; // eax
+      char *v1244 = NULL; // rbx
+      int64_t v1245 = 0;  // rsi
+      size_t v1246 = 0; // r14
+      WORD *outPtr = NULL; // rcx
+      WORD *v1259 = NULL; // rdi
+                 //char *v1259; // rdi
+      int v1260 = 0; // er9
+      signed int v1261 = 0; // er11
+      unsigned int v1262 = 0; // eax
+      unsigned int v1263 = 0; // edx
+      unsigned int v1264 = 0; // eax
+      unsigned int v1265 = 0; // er10
+      int64_t v1266 = 0; // rax
+      int64_t writeC = 0; // rdx
+      char *Dst = NULL; // [rsp+38h] [rbp-3C0h]
+      //int v1276 = 0; // [rsp+48h] [rbp-3B0h]
+
+      v5 = in;
+      Dst = out_buffer;
+
+      DataS = (uint8_t *)(v5 + *(unsigned int *)(v5 + 20));
+      v1217 = *(signed int *)(v5 + 12);
+      v1218 = *(uint8_t *)(v5 + 25) << 10;
+      if (v1218)
+      {
+         v1238 = (v1218 + (signed int)v1217 - 1) / v1218;
+         v1239 = v1238;
+         //v1276 = (v1218 + (signed int)v1217 - 1) / v1218;
+         v1240 = v1238 - 1;
+         v1241 = v1217 - v1218 * v1240;
+         if (v1239 <= 0)
+            return;
+         while (1)
+         {
+            v160 = v3 == v1240;
+            v1242 = v1218;
+            v1243 = *(uint16_t *)DataS;
+            if (v160)
+               v1242 = v1241;
+            v1244 = (char *)(DataS + 2);
+            v1245 = v1242;
+            if ((WORD)v1243)
+               v1242 = v1243;
+            v1246 = v1242;
+            outPtr = (WORD*)Dst;
+            if (v1246 == v1245)
+            {
+               if (Dst >= v1244 || (char *)Dst + v1246 <= v1244)
+                  memcpy(Dst, v1244, v1245);
+               else
+                  memmove(Dst, v1244, v1245);
+            }
+            else if (Dst >= v1244 || (char *)Dst + v1245 <= v1244)
+            {
+               v1259 = (WORD*)v1244;
+               v1260 = 0;
+               v1261 = 1;
+               while (1)
+               {
+                  while (1)
+                  {
+                     if (--v1261)
+                     {
+                        v1260 >>= 1;
+                     }
+                     else
+                     {
+                        v1260 = (uint16)*v1259;
+                        v1261 = 16;
+                        v1259++;
+                     }
+                     //LOWORD(v1262) = *v1259;
+                     v1262 = *v1259;
+                     if (!(v1260 & 1))
+                        break;
+                     *outPtr = v1262;
+                     ++outPtr;
+                     ++v1259;
+                  }
+                  v1262 = (uint16)v1262;
+                  v1263 = v1262 & 0xFFF;
+                  if (!(v1262 & 0xFFF))
+                     break;
+                  v1264 = v1262 >> 12;
+                  v1265 = v1264 + 2;
+                  if (v1264 != -2)
+                  {
+                     v1266 = -(int64_t)v1263;
+                     writeC = v1265;
+                     do
+                     {
+                        *outPtr = outPtr[v1266];
+                        ++outPtr;
+                        --writeC;
+                     } while (writeC);
+                  }
+                  ++v1259;
+               }
+            }
+            else
+            {
+               if (v1245 > 0x10000)
+                  return;
+               
+            }
+
+            Dst = (char *)Dst + v1245;
+            DataS = (uint8_t *)&v1244[v1246];
+            //SwitchToThread();
+            ++v3;
+            v1240 = v1239 - 1;
+            if (v3 >= v1239)
+            {
+               return;
+            }
+         }
+      }
+   }
+
+
+
+// https://github.com/sukharah/CLZ-Compression
+int CLZ__unpack(u8 *infile, int infile_size, u8 *outfile) {
+    u8 *limit = infile + infile_size;
+    u8 *o = outfile;
+    int i;
+  const int WINDOW_SIZE = 4096;
+  
+  char window[WINDOW_SIZE];
+  
+  int window_ofs = 0;
+  
+  if(!memcmp(infile, "CLZ\0", 4)) infile += 16; //infile.seekg(16, std::ios::beg);
+  int bits = 0, bit_count = 0;
+  
+  char c;
+  
+  const int BUFFER_SIZE = 4096;
+  char buffer_in[BUFFER_SIZE];
+  int buffer_size = 0;
+  int buffer_ofs = 0;
+  
+  bool exit = false;
+  
+  while (!exit) {
+    if (buffer_ofs >= buffer_size) {
+      if (infile < limit) {
+        //infile.read(buffer_in, BUFFER_SIZE);
+        //buffer_size = infile.gcount();
+        buffer_size = limit - infile;
+        if(buffer_size > BUFFER_SIZE) buffer_size = BUFFER_SIZE;
+        memcpy(buffer_in, infile, buffer_size);
+        infile += buffer_size;
+
+        buffer_ofs = 0;
+        if (buffer_ofs < buffer_size)
+          c = buffer_in[buffer_ofs++];
+        else
+          exit = true;
+      } else
+        exit = true;
+    } else {
+      c = buffer_in[buffer_ofs++];
+    }
+    if (!exit) {
+      if (bit_count == 0) {
+        bits = (int)c;
+        bit_count = 8;
+      } else {
+        if (bits & 1) {
+          int window_delta = (int)c & 0xff;
+          
+          if (buffer_ofs >= buffer_size) {
+            if (infile < limit) {
+              //infile.read(buffer_in, BUFFER_SIZE);
+              //buffer_size = infile.gcount();
+            buffer_size = limit - infile;
+            if(buffer_size > BUFFER_SIZE) buffer_size = BUFFER_SIZE;
+            memcpy(buffer_in, infile, buffer_size);
+            infile += buffer_size;
+
+              buffer_ofs = 0;
+              if (buffer_ofs < buffer_size)
+                c = buffer_in[buffer_ofs++];
+              else
+                exit = true;
+            } else
+              exit = true;
+          } else {
+            c = buffer_in[buffer_ofs++];
+          }
+          
+          int length = (int)c & 0xff;
+          window_delta |= length << 4 & 0xf00;
+          length = (length & 0x0f) + 3;
+          
+          if (window_ofs + length >= WINDOW_SIZE) {
+            for (i = window_ofs; i < WINDOW_SIZE; ++i) {
+              window[i] = window[(window_delta + i) % WINDOW_SIZE];
+            }
+            memcpy(o, window, WINDOW_SIZE); o += WINDOW_SIZE; //outfile.write(window, WINDOW_SIZE);
+            window_ofs = window_ofs + length - WINDOW_SIZE;
+            for (i = 0; i < window_ofs; ++i) {
+              window[i] = window[(i + window_delta) % WINDOW_SIZE];
+            }
+          } else {
+            for (i = 0; i < length; ++i) {
+              window[window_ofs + i] = window[(window_ofs + i + window_delta) % WINDOW_SIZE];
+            }
+            window_ofs += length;
+          }
+        } else {
+          window[window_ofs++] = c;
+          if (window_ofs == WINDOW_SIZE) {
+            memcpy(o, window, WINDOW_SIZE); o += WINDOW_SIZE; //outfile.write(window, WINDOW_SIZE);
+            window_ofs = 0;
+          }
+        }
+        bits >>= 1;
+        --bit_count;
+      }
+    }
+  }
+  if (window_ofs) {
+    memcpy(o, window, window_ofs); o += window_ofs; //outfile.write(window, window_ofs);
+  }
+
+    return o - outfile;
+}
 

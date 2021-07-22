@@ -7,22 +7,26 @@
 #ifndef SZAPI_ADPT_H
 #define SZAPI_ADPT_H
 
-#if defined(WIN32) && !defined(__MWERKS__)
-#if defined(_SZDLL_)
-#pragma warning(disable: 4273)	/* Disable the dll linkage warnings */
-#define __SZ_DLL__ __declspec(dllexport)
-/*#define __DLLVARH425__ __declspec(dllexport)*/
-#elif defined(_SZUSEDLL_)
-#define __SZ_DLL__ __declspec(dllimport)
-/*#define __DLLVARH425__ __declspec(dllimport)*/
-#else
-#define __SZ_DLL__
-/*#define __DLLVARH425__ extern*/
-#endif /* _SZDLL_ */
+/* This will only be defined if szip was built with CMake shared libs*/
+#ifdef SZ_BUILT_AS_DYNAMIC_LIB
 
-#else /*WIN32*/
-#define __SZ_DLL__
-/*#define __DLLVAR__ extern*/
+#if defined (szip_shared_EXPORTS)
+  #define _SZDLL_
+  #if defined (_MSC_VER)  /* MSVC Compiler Case */
+    #define __SZ_DLL__ __declspec(dllexport)
+  #elif (__GNUC__ >= 4)  /* GCC 4.x has support for visibility options */
+    #define __SZ_DLL__ __attribute__ ((visibility("default")))
+  #endif
+#else
+  #if defined (_MSC_VER)  /* MSVC Compiler Case */
+    #define __SZ_DLL__ __declspec(dllimport)
+  #elif (__GNUC__ >= 4)  /* GCC 4.x has support for visibility options */
+    #define __SZ_DLL__ __attribute__ ((visibility("default")))
+  #endif
 #endif
+
+#else /* SZ_BUILT_AS_DYNAMIC_LIB */
+  #define __SZ_DLL__
+#endif /* SZ_BUILT_AS_DYNAMIC_LIB */
 
 #endif /* H5API_ADPT_H */

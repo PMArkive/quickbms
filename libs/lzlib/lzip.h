@@ -1,5 +1,5 @@
 /*  Lzlib - Compression library for the lzip format
-    Copyright (C) 2009-2017 Antonio Diaz Diaz.
+    Copyright (C) 2009-2019 Antonio Diaz Diaz.
 
     This library is free software. Redistribution and use in source and
     binary forms, with or without modification, are permitted provided
@@ -35,6 +35,8 @@ static inline State St_set_char( const State st )
   static const State next[states] = { 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 4, 5 };
   return next[st];
   }
+
+static inline State St_set_char_rep() { return 8; }
 
 static inline State St_set_match( const State st )
   { return ( ( st < 7 ) ? 7 : 10 ); }
@@ -191,43 +193,43 @@ static inline int real_bits( unsigned value )
   }
 
 
-static const uint8_t magic_string[4] = { 0x4C, 0x5A, 0x49, 0x50 }; /* "LZIP" */
+static const uint8_t lzip_magic[4] = { 0x4C, 0x5A, 0x49, 0x50 }; /* "LZIP" */
 
-typedef uint8_t File_header[6];		/* 0-3 magic bytes */
+typedef uint8_t Lzip_header[6];		/* 0-3 magic bytes */
 					/*   4 version */
 					/*   5 coded_dict_size */
-enum { Fh_size = 6 };
+enum { Lh_size = 6 };
 
-static inline void Fh_set_magic( File_header data )
-  { memcpy( data, magic_string, 4 ); data[4] = 1; }
+static inline void Lh_set_magic( Lzip_header data )
+  { memcpy( data, lzip_magic, 4 ); data[4] = 1; }
 
-static inline bool Fh_verify_magic( const File_header data )
-  { return ( memcmp( data, magic_string, 4 ) == 0 ); }
+static inline bool Lh_verify_magic( const Lzip_header data )
+  { return ( memcmp( data, lzip_magic, 4 ) == 0 ); }
 
 /* detect (truncated) header */
-static inline bool Fh_verify_prefix( const File_header data, const int sz )
+static inline bool Lh_verify_prefix( const Lzip_header data, const int sz )
   {
   int i; for( i = 0; i < sz && i < 4; ++i )
-    if( data[i] != magic_string[i] ) return false;
+    if( data[i] != lzip_magic[i] ) return false;
   return ( sz > 0 );
   }
 
 /* detect corrupt header */
-static inline bool Fh_verify_corrupt( const File_header data )
+static inline bool Lh_verify_corrupt( const Lzip_header data )
   {
   int matches = 0;
   int i; for( i = 0; i < 4; ++i )
-    if( data[i] == magic_string[i] ) ++matches;
+    if( data[i] == lzip_magic[i] ) ++matches;
   return ( matches > 1 && matches < 4 );
   }
 
-static inline uint8_t Fh_version( const File_header data )
+static inline uint8_t Lh_version( const Lzip_header data )
   { return data[4]; }
 
-static inline bool Fh_verify_version( const File_header data )
+static inline bool Lh_verify_version( const Lzip_header data )
   { return ( data[4] == 1 ); }
 
-static inline unsigned Fh_get_dictionary_size( const File_header data )
+static inline unsigned Lh_get_dictionary_size( const Lzip_header data )
   {
   unsigned sz = ( 1 << ( data[5] & 0x1F ) );
   if( sz > min_dictionary_size )
@@ -235,7 +237,7 @@ static inline unsigned Fh_get_dictionary_size( const File_header data )
   return sz;
   }
 
-static inline bool Fh_set_dictionary_size( File_header data, const unsigned sz )
+static inline bool Lh_set_dictionary_size( Lzip_header data, const unsigned sz )
   {
   if( !isvalid_ds( sz ) ) return false;
   data[5] = real_bits( sz - 1 );
@@ -251,47 +253,46 @@ static inline bool Fh_set_dictionary_size( File_header data, const unsigned sz )
   return true;
   }
 
-static inline bool Fh_verify( const File_header data )
+static inline bool Lh_verify( const Lzip_header data )
   {
-  if( Fh_verify_magic( data ) && Fh_verify_version( data ) )
-    return isvalid_ds( Fh_get_dictionary_size( data ) );
+  if( Lh_verify_magic( data ) && Lh_verify_version( data ) )
+    return isvalid_ds( Lh_get_dictionary_size( data ) );
   return false;
   }
 
 
-typedef uint8_t File_trailer[20];
+typedef uint8_t Lzip_trailer[20];
 			/*  0-3  CRC32 of the uncompressed data */
 			/*  4-11 size of the uncompressed data */
 			/* 12-19 member size including header and trailer */
+enum { Lt_size = 20 };
 
-enum { Ft_size = 20 };
-
-static inline unsigned Ft_get_data_crc( const File_trailer data )
+static inline unsigned Lt_get_data_crc( const Lzip_trailer data )
   {
   unsigned tmp = 0;
   int i; for( i = 3; i >= 0; --i ) { tmp <<= 8; tmp += data[i]; }
   return tmp;
   }
 
-static inline void Ft_set_data_crc( File_trailer data, unsigned crc )
+static inline void Lt_set_data_crc( Lzip_trailer data, unsigned crc )
   { int i; for( i = 0; i <= 3; ++i ) { data[i] = (uint8_t)crc; crc >>= 8; } }
 
-static inline unsigned long long Ft_get_data_size( const File_trailer data )
+static inline unsigned long long Lt_get_data_size( const Lzip_trailer data )
   {
   unsigned long long tmp = 0;
   int i; for( i = 11; i >= 4; --i ) { tmp <<= 8; tmp += data[i]; }
   return tmp;
   }
 
-static inline void Ft_set_data_size( File_trailer data, unsigned long long sz )
+static inline void Lt_set_data_size( Lzip_trailer data, unsigned long long sz )
   { int i; for( i = 4; i <= 11; ++i ) { data[i] = (uint8_t)sz; sz >>= 8; } }
 
-static inline unsigned long long Ft_get_member_size( const File_trailer data )
+static inline unsigned long long Lt_get_member_size( const Lzip_trailer data )
   {
   unsigned long long tmp = 0;
   int i; for( i = 19; i >= 12; --i ) { tmp <<= 8; tmp += data[i]; }
   return tmp;
   }
 
-static inline void Ft_set_member_size( File_trailer data, unsigned long long sz )
+static inline void Lt_set_member_size( Lzip_trailer data, unsigned long long sz )
   { int i; for( i = 12; i <= 19; ++i ) { data[i] = (uint8_t)sz; sz >>= 8; } }

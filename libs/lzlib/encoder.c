@@ -1,5 +1,5 @@
 /*  Lzlib - Compression library for the lzip format
-    Copyright (C) 2009-2017 Antonio Diaz Diaz.
+    Copyright (C) 2009-2019 Antonio Diaz Diaz.
 
     This library is free software. Redistribution and use in source and
     binary forms, with or without modification, are permitted provided
@@ -313,7 +313,7 @@ static int LZe_sequence_optimizer( struct LZ_encoder * const e,
         --prev_index;
       else					/* prev_index2 >= 0 */
         prev_index = prev_index2;
-      cur_state = 8;				/* St_set_char_rep(); */
+      cur_state = St_set_char_rep();
       }
     cur_trial->state = cur_state;
     for( i = 0; i < num_rep_distances; ++i )

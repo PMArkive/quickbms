@@ -105,6 +105,8 @@ enum {
     CMD_Continue,
     CMD_Label,
     CMD_If_Return,      // internal usage
+    CMD_DirectoryExists,
+    CMD_FEof,
     CMD_NOP
 };
 
@@ -164,6 +166,7 @@ enum {  // the value is referred to their size which makes the job faster, numbe
     BMS_TYPE_TCC                = -1036,
     BMS_TYPE_VARIABLE6          = -1037,
     BMS_TYPE_VARIABLE7          = -1038,
+    BMS_TYPE_UNICODE32          = -1039,
         //
     BMS_TYPE_ASM16              = -2000,
     BMS_TYPE_ASM64              = -2001,
@@ -260,12 +263,16 @@ typedef struct {
 
 
 
+#define MAX_REIMPORT_MATH_OPS   8   // apparently doesn't eat much memory, even 256 takes only one megabyte
 typedef struct {
     u_int   offset;     // offsets are u_int because quickbms is limited to 32bit, quickbms_4gb_files doesn't have this limit
     i32     fd;
     i32     type;
-    i32     math_op;    // i32 necessary for -1000
-    int     math_value;
+    i32     math_ops;   // history of operations
+    i32     math_op   [MAX_REIMPORT_MATH_OPS];  // i32 necessary for -1000
+    int     math_value[MAX_REIMPORT_MATH_OPS];
+    i32     math_opbck[MAX_REIMPORT_MATH_OPS];
+    int     use_filexor;
 } variable_reimport_t;
 
 
@@ -311,10 +318,12 @@ typedef struct {
     };
 #endif
 
-    u8      isnum;          // 1 if it's a number, 0 if a string
-    u8      constant;       // 1 if the variable is a fixed number and not a "real" variable
-    u8      binary;         // 1 if the variable is binary
-    u8      reserved;
+    i8      isnum;          // 1 if it's a number, 0 if a string. -1 for floats
+    i8      constant;       // 1 if the variable is a fixed number and not a "real" variable
+    i8      binary;         // 1 if the variable is binary
+    i8      reserved;
+
+    double  float64;
 
     sub_variable_t  *sub_var;
 
@@ -414,8 +423,8 @@ typedef struct {
 
 typedef struct {
     u8      *name;
-    //u_int   offset; // unused at the moment
-    u_int   size;
+    //u64     offset; // unused at the moment
+    u64     size;
 } files_t;
 
 
@@ -540,6 +549,7 @@ rsa_context     *rsa_ctx        = NULL;
         int     idx;
         int     cipher;
         int     hash;
+        int     prng;
         u8      *key;
         int     keysz;
         u8      *ivec;      // allocated
@@ -580,6 +590,8 @@ int             g_oodlenetwork_shared_size  = 0;
 u8              *molebox_ctx        = NULL;
 replace_ctx_t   *replace_ctx        = NULL;
 arc4_context    *rc4_ctx            = NULL;
+int             d3des_ctx           = 0;
+chacha20_ctx    *chacha_ctx         = NULL;
 
 
 
@@ -605,12 +617,6 @@ int     g_last_cmd                  = 0,
         g_quiet                     = 0,
         g_quick_gui_exit            = 0,
         g_compression_type          = COMP_ZLIB,
-        *g_filexor_pos              = NULL,
-        g_filexor_size              = 0,
-        *g_filerot_pos              = NULL,
-        g_filerot_size              = 0,
-        *g_filecrypt_pos            = NULL,
-        g_filecrypt_size            = 0,
         g_comtype_dictionary_len    = 0,
         g_comtype_scan              = 0,
         g_encrypt_mode              = 0,
@@ -643,7 +649,11 @@ int     g_last_cmd                  = 0,
         g_replace_fdnum0            = 0,
         g_extracted_file_tree_view_mode = -1,
         g_quickbms_dll              = 0,
-        g_extraction_hash           = 0;
+        g_extraction_hash           = 0,
+        g_force_output_pos          = 0,    // used in reimport mode, don't reset it
+        g_reimport_shrink_enlarge   = 0,
+        g_force_utf16               = 0,    // currently used only in slog
+        g_log_filler_char           = -1;
         //g_min_int                   = 1 << ((sizeof(int) << 3) - 1),
         //g_max_int                   = (u_int)(1 << ((sizeof(int) << 3) - 1)) - 1;
 u8      g_current_folder[PATHSZ + 1]= "",  // just the current folder when the program is launched
@@ -655,9 +665,6 @@ u8      g_current_folder[PATHSZ + 1]= "",  // just the current folder when the p
         g_output_folder[PATHSZ + 1] = "",
         **g_filter_files            = NULL,     // the wildcard
         **g_filter_in_files         = NULL,     // the wildcard
-        *g_filexor                  = NULL,     // contains all the XOR numbers
-        *g_filerot                  = NULL,     // contains all the rot13 numbers
-        *g_filecrypt                = NULL,     // nothing
         *g_comtype_dictionary       = NULL,
         *g_quickbms_execute_file    = NULL,
         *g_force_output             = NULL,
@@ -667,6 +674,16 @@ int     EXTRCNT_idx                 = -1,
         NotEOF_idx                  = -1,
         SOF_idx                     = -1,
         EOF_idx                     = -1;
+
+typedef struct {
+    int     cmd;
+    u8      *key;
+    int     *pos;
+    int     size;
+} filexor_t;
+filexor_t   g_filexor       = {0, NULL, NULL, 0};
+filexor_t   g_filerot       = {0, NULL, NULL, 0};
+filexor_t   g_filecrypt     = {0, NULL, NULL, 0};
 
 
 
@@ -682,7 +699,8 @@ int     enable_sockets              = 0,
 // alternative -r -r mode, they are just variable indexes
 int     g_reimport2_offset          = -1,
         g_reimport2_zsize           = -1,
-        g_reimport2_size            = -1;
+        g_reimport2_size            = -1,
+        g_reimport2_xsize           = -1;
 
 
 

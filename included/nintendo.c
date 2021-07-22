@@ -262,6 +262,7 @@ int unlz77wii(unsigned char *in, int insz, u8 **ret_out, int *full_outsz) {
     myalloc(&out, outsz, full_outsz);
     *ret_out = out;
 
+    ntcompress_init();
     switch(tag >> 4) {
         case (WII_NONE_TAG >> 4):  outsz = unlz77wii_raw00(in, insz, out, outsz);   break;
         case (WII_LZ77_TAG >> 4): {

@@ -39,7 +39,8 @@ Oodle_algorithms_raw_t    Oodle_algorithms_raw[Oodle_algorithms_raw_max] = { // 
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "oodle_dll.h"
+#include "oo2core_dll.h"
+#include "oo2net_dll.h"
 
 // int is 64bit in Oodle64
 int   __stdcall (*OodleLZ_Compress)(int algo, void *in, int insz, void *out, int max, void *a, void *b, void *c, void *d, int e) = NULL;
@@ -107,31 +108,34 @@ void *myOodle_GetProcAddress_scanner(HMODULE hlib, char *func_name, int argc_min
 
 
 int myOodle_Init(void) {
-    static HMODULE hlib = NULL;
+    static HMODULE hlib     = NULL;
+    static HMODULE hlib_net = NULL;
     if(!hlib) {
-        hlib = (void *)MemoryLoadLibrary((void *)oodle_dll, sizeof(oodle_dll));
-        if(hlib) {
-            #define Oodle_GetProcAddress(X,Y) \
-                if(!X) X = (void *)MemoryGetProcAddress(hlib, #X); \
-                if(!X) X = (void *)MemoryGetProcAddress(hlib, "_"#X"@"#Y);
 
+        #define Oodle_GetProcAddress(X,Y,Z) \
+            if(!X) X = (void *)MemoryGetProcAddress(hlib##Z, #X); \
+            if(!X) X = (void *)MemoryGetProcAddress(hlib##Z, "_"#X"@"#Y);
+
+        hlib = (void *)MemoryLoadLibrary((void *)oo2core_dll, sizeof(oo2core_dll));
+        if(hlib) {
             // it's boring that the prototypes of OodleLZ_* change so often,
             // let my calling_convention.h do the job for me :)
 
-            Oodle_GetProcAddress(OodleLZ_Compress, 40)
+            Oodle_GetProcAddress(OodleLZ_Compress, 40,)
             if(!OodleLZ_Compress)   OodleLZ_Compress    = myOodle_GetProcAddress_scanner(hlib, "OodleLZ_Compress",    5, &OodleLZ_Compress_argc);
-            Oodle_GetProcAddress(OodleLZ_Decompress, 56)
+            Oodle_GetProcAddress(OodleLZ_Decompress, 56,)
             if(!OodleLZ_Decompress) OodleLZ_Decompress  = myOodle_GetProcAddress_scanner(hlib, "OodleLZ_Decompress",  4, &OodleLZ_Decompress_argc);
 
-            Oodle_GetProcAddress(Oodle_GetConfigValues, 4)
-            Oodle_GetProcAddress(Oodle_SetConfigValues, 4)
-            Oodle_GetProcAddress(OodleLZ_Compressor_GetName, 4)
-            Oodle_GetProcAddress(OodleNetwork1UDP_Decode, 24)
-            Oodle_GetProcAddress(OodleNetwork1UDP_Encode, 20)
-            Oodle_GetProcAddress(OodleNetwork1UDP_State_Size, 0)
-            Oodle_GetProcAddress(OodleNetwork1UDP_State_Uncompact, 8)
-            Oodle_GetProcAddress(OodleNetwork1_Shared_SetWindow, 16)
-            Oodle_GetProcAddress(OodleNetwork1_Shared_Size, 4)
+            Oodle_GetProcAddress(Oodle_GetConfigValues, 4,)
+            Oodle_GetProcAddress(Oodle_SetConfigValues, 4,)
+            Oodle_GetProcAddress(OodleLZ_Compressor_GetName, 4,)
+
+            Oodle_GetProcAddress(OodleNetwork1UDP_Decode, 24,)
+            Oodle_GetProcAddress(OodleNetwork1UDP_Encode, 20,)
+            Oodle_GetProcAddress(OodleNetwork1UDP_State_Size, 0,)
+            Oodle_GetProcAddress(OodleNetwork1UDP_State_Uncompact, 8,)
+            Oodle_GetProcAddress(OodleNetwork1_Shared_SetWindow, 16,)
+            Oodle_GetProcAddress(OodleNetwork1_Shared_Size, 4,)
         }
         if(!hlib) {
             fprintf(stderr, "\nError: unable to load the Oodle DLL\n");
@@ -140,6 +144,16 @@ int myOodle_Init(void) {
         if(!OodleLZ_Compress || !OodleLZ_Decompress) {
             fprintf(stderr, "\nError: unable to find the OodleLZ_* functions\n");
             myexit(QUICKBMS_ERROR_DLL);
+        }
+
+        hlib_net = (void *)MemoryLoadLibrary((void *)oo2net_dll, sizeof(oo2net_dll));
+        if(hlib_net) {
+            Oodle_GetProcAddress(OodleNetwork1UDP_Decode, 24, _net)
+            Oodle_GetProcAddress(OodleNetwork1UDP_Encode, 20, _net)
+            Oodle_GetProcAddress(OodleNetwork1UDP_State_Size, 0, _net)
+            Oodle_GetProcAddress(OodleNetwork1UDP_State_Uncompact, 8, _net)
+            Oodle_GetProcAddress(OodleNetwork1_Shared_SetWindow, 16, _net)
+            Oodle_GetProcAddress(OodleNetwork1_Shared_Size, 4, _net)
         }
 
         // better to leave the asserts enabled for debug information

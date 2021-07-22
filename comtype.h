@@ -749,6 +749,12 @@ static /*const*/ quickbms_comp_list_t quickbms_comp_list[] = {
     QUICKBMS_COMP(ULZ)
     QUICKBMS_COMP(SLZ_ROF)
     QUICKBMS_COMP(LZ4X_NEW)
+    QUICKBMS_COMP(COPY2)
+    QUICKBMS_COMP(SLZ_03b)
+    QUICKBMS_COMP(MPPC)
+    QUICKBMS_COMP(MPPC_BIG)
+    QUICKBMS_COMP(ALZSS)
+    QUICKBMS_COMP(CLZ)
 
 //#ifdef QUICKBMS_COMP_ENUM
         // nop
@@ -905,6 +911,9 @@ static /*const*/ quickbms_comp_list_t quickbms_comp_list[] = {
     QUICKBMS_COMP(NCOMPRESS_COMPRESS)
     QUICKBMS_COMP(UNCOMPRESS_COMPRESS)
     QUICKBMS_COMP(LZ4X_NEW_COMPRESS)
+    QUICKBMS_COMP(DRAGONBALLZ_COMPRESS)
+    QUICKBMS_COMP(MPPC_COMPRESS)
+    QUICKBMS_COMP(MPPC_BIG_COMPRESS)
 
 //#ifdef QUICKBMS_COMP_ENUM
     // remember to put the _COMPRESS ones also in file.c for reimporting

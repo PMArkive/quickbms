@@ -1,5 +1,5 @@
 /*  Lzcheck - Test program for the lzlib library
-    Copyright (C) 2009-2017 Antonio Diaz Diaz.
+    Copyright (C) 2009-2019 Antonio Diaz Diaz.
 
     This program is free software: you have unlimited permission
     to copy, distribute and modify it.
@@ -119,9 +119,11 @@ int lzcheck( FILE * const file, const int dictionary_size )
     {
     rewind( file );
     if( LZ_compress_finish( encoder ) < 0 ||
+        LZ_compress_finish( encoder ) < 0 ||
         LZ_decompress_write( decoder, mid_buffer,
           LZ_compress_read( encoder, mid_buffer, buffer_size ) ) < 0 ||
         LZ_decompress_read( decoder, out_buffer, buffer_size ) != 0 ||
+        LZ_compress_finish( encoder ) < 0 ||
         LZ_compress_restart_member( encoder, member_size ) < 0 )
       {
       fprintf( stderr, "lzcheck: Can't finish member: %s\n",

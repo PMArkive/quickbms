@@ -1,5 +1,5 @@
 /*  Lzlib - Compression library for the lzip format
-    Copyright (C) 2009-2017 Antonio Diaz Diaz.
+    Copyright (C) 2009-2019 Antonio Diaz Diaz.
 
     This library is free software. Redistribution and use in source and
     binary forms, with or without modification, are permitted provided
@@ -287,7 +287,7 @@ static inline bool LZe_init( struct LZ_encoder * const e,
                              const int dict_size, const int len_limit,
                              const unsigned long long member_size )
   {
-  enum { before = max_num_trials,
+  enum { before_size = max_num_trials,
          /* bytes to keep in buffer after pos */
          after_size = max_num_trials + ( 2 * max_match_len ) + 1,
          dict_factor = 2,
@@ -295,7 +295,7 @@ static inline bool LZe_init( struct LZ_encoder * const e,
          pos_array_factor = 2,
          min_free_bytes = 2 * max_num_trials };
 
-  if( !LZeb_init( &e->eb, before, dict_size, after_size, dict_factor,
+  if( !LZeb_init( &e->eb, before_size, dict_size, after_size, dict_factor,
                   num_prev_positions23, pos_array_factor, min_free_bytes,
                   member_size ) ) return false;
   e->cycles = ( len_limit < max_match_len ) ? 16 + ( len_limit / 2 ) : 256;

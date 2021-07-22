@@ -1,5 +1,5 @@
 /*  Buffer to buffer example - Test program for the lzlib library
-    Copyright (C) 2010-2017 Antonio Diaz Diaz.
+    Copyright (C) 2010-2019 Antonio Diaz Diaz.
 
     This program is free software: you have unlimited permission
     to copy, distribute and modify it.
@@ -26,10 +26,10 @@
 
 
 /* Returns the address of a malloc'd buffer containing the file data and
-   its size in '*size'.
-   In case of error, returns 0 and does not modify '*size'.
+   the file size in '*file_sizep'.
+   In case of error, returns 0 and does not modify '*file_sizep'.
 */
-uint8_t * read_file( const char * const name, long * const size )
+uint8_t * read_file( const char * const name, long * const file_sizep )
   {
   long buffer_size = 1 << 20, file_size;
   uint8_t * buffer, * tmp;
@@ -67,7 +67,7 @@ uint8_t * read_file( const char * const name, long * const size )
     free( buffer ); return 0;
     }
   fclose( f );
-  *size = file_size;
+  *file_sizep = file_size;
   return buffer;
   }
 

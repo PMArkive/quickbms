@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2018 Luigi Auriemma
+    Copyright 2009-2019 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -486,6 +486,7 @@ void tomcrypt_lame_ivec(TOMCRYPT *ctx, u8 *ivec, int ivecsz) {
 
 // badly implemented because it's intended only as a test
 TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int outsz, i32 *ret) {
+    #define tomcrypt_doit_error { error_line = __LINE__; goto quit; }
     static int      init = 0;
     symmetric_ECB   ecb;
     symmetric_CFB   cfb;
@@ -498,11 +499,15 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
     long    tmp;
     i32     stat;
     int     i,
-            use_tomcrypt    = 0;
+            use_tomcrypt    = 0,
+            error_line  = 0,
+            error   = 0;
     u8      tag[64] = "",
             desc[64],
             *p,
             *l;
+
+    int try_again_counter = 0;
 
     ltc_mp = ltm_desc;
 
@@ -542,6 +547,12 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
     } quickbms_tomcrypt_t;
     static int                  quickbms_tomcrypts = 0;
     static quickbms_tomcrypt_t  quickbms_tomcrypt[64];
+
+    if(!init) {
+        register_all_ciphers();
+        register_all_hashes();
+        register_all_prngs();
+    }
 
     #define TOMCRYPT_REGISTER(Z, X,Y) \
         if(!init) { \
@@ -613,6 +624,13 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
     TOMCRYPT_REGISTER(hash, rmd256, NULL)
     TOMCRYPT_REGISTER(hash, rmd320, NULL)
 
+    TOMCRYPT_REGISTER(prng, yarrow, NULL)
+    TOMCRYPT_REGISTER(prng, fortuna, NULL)
+    TOMCRYPT_REGISTER(prng, rc4, NULL)
+    TOMCRYPT_REGISTER(prng, chacha20_prng, NULL)
+    TOMCRYPT_REGISTER(prng, sprng, NULL)
+    TOMCRYPT_REGISTER(prng, sober128, NULL)
+
     if(!init) init = 1;
 
     if(type) {
@@ -629,12 +647,12 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
             }
 
         for(p = desc; *p; p = l + 1) {
-            l = strchr(p, ' ');
-            if(l) *l = 0;
-
             while(*p && (*p <= ' ')) p++;
+            for(l = p; *l && *l > ' '; l++);
+            if(*l) *l = 0;
+            else   l = NULL;
 
-            if(!strnicmp(p, "lib", 3)) p += 3;
+            if(!strnicmp(p, "lib", 3)) p += 3;  // "libtomcrypt"
             if(!strnicmp(p, "tomcrypt", 8)) {
                 use_tomcrypt = 1;
                 p += 8;
@@ -642,13 +660,20 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
                 for(i = 0; i < quickbms_tomcrypts; i++) {
                     if(!stricmp(p, quickbms_tomcrypt[i].name)) {
                         ctx->idx = quickbms_tomcrypt[i].idx;
-                        if(!stricmp(quickbms_tomcrypt[i].name, "cipher")) {
+                        if(!stricmp(quickbms_tomcrypt[i].type, "cipher")) {
                             ctx->cipher = tomcrypt_enum_ecb;
-                        } else if(!stricmp(quickbms_tomcrypt[i].name, "hash")) {
+                        } else if(!stricmp(quickbms_tomcrypt[i].type, "hash")) {
                             ctx->hash   = TRUE;
+                        } else if(!stricmp(quickbms_tomcrypt[i].type, "prng")) {
+                            ctx->prng   = TRUE;
                         }
+                        break;
                     }
                 }
+
+                if(ctx->idx < 0) ctx->idx = find_cipher(p);
+                if(ctx->idx < 0) ctx->idx = find_hash(p);
+                if(ctx->idx < 0) ctx->idx = find_prng(p);
 
                 #define TOMCRYPT_REGISTER_ENUM(X) \
                     else if(stristr(p, #X)) ctx->cipher = tomcrypt_enum_##X;
@@ -705,83 +730,100 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
     #define TOMCRYPT_CRYPT_MODE3(X) \
         X##_done(&X);
     #define TOMCRYPT_CRYPT_MODE2(X) \
-        if(g_encrypt_mode) { if(X##_encrypt(in, out, insz, &X)) if(X##_encrypt(in, out, set_tomcrypt_blocklen(insz, blocklen), &X)) goto quit; } \
-        else               { if(X##_decrypt(in, out, insz, &X)) if(X##_decrypt(in, out, set_tomcrypt_blocklen(insz, blocklen), &X)) goto quit; } \
+        if(g_encrypt_mode) { if(error = X##_encrypt(in, out, insz, &X)) if(error = X##_encrypt(in, out, set_tomcrypt_blocklen(insz, blocklen), &X)) tomcrypt_doit_error } \
+        else               { if(error = X##_decrypt(in, out, insz, &X)) if(error = X##_decrypt(in, out, set_tomcrypt_blocklen(insz, blocklen), &X)) tomcrypt_doit_error } \
         TOMCRYPT_CRYPT_MODE3(X)
     #define TOMCRYPT_CRYPT_MODE(X) \
-        if(X##_setiv(ctx->ivec, ctx->ivecsz, &X)) goto quit; \
+        if(ctx->ivec && (ctx->ivecsz > 0)) { \
+            if(error = X##_setiv(ctx->ivec, ctx->ivecsz, &X)) { \
+                ctx->ivecsz = cipher_descriptor[ctx->idx].block_length; \
+                if(error = X##_setiv(ctx->ivec, ctx->ivecsz, &X)) { \
+                    tomcrypt_doit_error \
+                } \
+            } \
+        } \
         TOMCRYPT_CRYPT_MODE2(X)
 
     if(ret) *ret = 0;
     if(ctx->idx < 0) ctx->idx = 0;
 
+    i32 keysz;
+    cipher_descriptor[ctx->idx].keysize(&keysz);
+
+try_again:
+    try_again_counter++;
+
     if(ctx->hash) {
-        if(hash_memory(ctx->idx, in, insz, out, &tmp)) goto quit;
+        if(error = hash_memory(ctx->idx, in, insz, out, &tmp)) tomcrypt_doit_error
+
+    } else if(ctx->prng) {
+        // not supported because doesn't seem to exist an unique way to call the current one
+        tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_ecb) {
-        if(ecb_start(ctx->idx, ctx->key, ctx->keysz, 0, &ecb)) goto quit;
+        if(error = ecb_start(ctx->idx, ctx->key, ctx->keysz, 0, &ecb)) tomcrypt_doit_error
         blocklen = ecb.blocklen;
         TOMCRYPT_CRYPT_MODE2(ecb)
 
     } else if(ctx->cipher == tomcrypt_enum_cfb) {
-        if(cfb_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, 0, &cfb)) goto quit;
+        if(error = cfb_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, 0, &cfb)) tomcrypt_doit_error
         blocklen = cfb.blocklen;
         TOMCRYPT_CRYPT_MODE(cfb)
 
     } else if(ctx->cipher == tomcrypt_enum_ofb) {
-        if(ofb_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, 0, &ofb)) goto quit;
+        if(error = ofb_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, 0, &ofb)) tomcrypt_doit_error
         blocklen = ofb.blocklen;
         TOMCRYPT_CRYPT_MODE(ofb)
 
     } else if(ctx->cipher == tomcrypt_enum_cbc) {
-        if(cbc_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, 0, &cbc)) goto quit;
+        if(error = cbc_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, 0, &cbc)) tomcrypt_doit_error
         blocklen = cbc.blocklen;
         TOMCRYPT_CRYPT_MODE(cbc)
 
     } else if(ctx->cipher == tomcrypt_enum_ctr) {
-        if(ctr_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, 0, CTR_COUNTER_LITTLE_ENDIAN, &ctr)) goto quit;
+        if(error = ctr_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, 0, CTR_COUNTER_LITTLE_ENDIAN, &ctr)) tomcrypt_doit_error
         blocklen = ctr.blocklen;
         TOMCRYPT_CRYPT_MODE(ctr)
 
     } else if(ctx->cipher == tomcrypt_enum_lrw) {
-        if(lrw_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, ctx->tweak, 0, &lrw)) goto quit;
+        if(error = lrw_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, ctx->tweak, 0, &lrw)) tomcrypt_doit_error
         //blocklen = lrw.blocklen;
         TOMCRYPT_CRYPT_MODE(lrw)
 
     } else if(ctx->cipher == tomcrypt_enum_f8) {
-        if(f8_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, ctx->nonce, ctx->noncelen, 0, &f8)) goto quit;
+        if(error = f8_start(ctx->idx, ctx->ivec, ctx->key, ctx->keysz, ctx->nonce, ctx->noncelen, 0, &f8)) tomcrypt_doit_error
         blocklen = f8.blocklen;
         TOMCRYPT_CRYPT_MODE(f8)
 
     } else if(ctx->cipher == tomcrypt_enum_xts) {
-        if(xts_start(ctx->idx, ctx->key, ctx->nonce, ctx->keysz, 0, &xts)) goto quit;
+        if(error = xts_start(ctx->idx, ctx->key, ctx->nonce, ctx->keysz, 0, &xts)) tomcrypt_doit_error
         //blocklen = xts.blocklen;
-        if(g_encrypt_mode) { if(xts_encrypt(in, insz, out, ctx->tweak, &xts)) goto quit; } \
-        else               { if(xts_decrypt(in, insz, out, ctx->tweak, &xts)) goto quit; } \
+        if(g_encrypt_mode) { if(error = xts_encrypt(in, insz, out, ctx->tweak, &xts)) tomcrypt_doit_error }
+        else               { if(error = xts_decrypt(in, insz, out, ctx->tweak, &xts)) tomcrypt_doit_error }
         TOMCRYPT_CRYPT_MODE3(xts)
 
     } else if(ctx->cipher == tomcrypt_enum_hmac) {
-        if(hmac_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) goto quit;
+        if(error = hmac_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_omac) {
-        if(omac_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) goto quit;
+        if(error = omac_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_pmac) {
-        if(pmac_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) goto quit;
+        if(error = pmac_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_eax) {
         tmp = sizeof(tag);
         if(g_encrypt_mode) {
-            if(eax_encrypt_authenticate_memory(
+            if(error = eax_encrypt_authenticate_memory(
                 ctx->idx,
                 ctx->key, ctx->keysz,
                 ctx->nonce, ctx->noncelen,
                 ctx->header, ctx->headerlen,
                 in, insz,
                 out,
-                tag, &tmp)) goto quit;
+                tag, &tmp)) tomcrypt_doit_error
         } else {
-            if(eax_decrypt_verify_memory(
+            if(error = eax_decrypt_verify_memory(
                 ctx->idx,
                 ctx->key, ctx->keysz,
                 ctx->nonce, ctx->noncelen,
@@ -789,23 +831,23 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
                 in, insz,
                 out,
                 tag, tmp,
-                &stat)) goto quit;
+                &stat)) tomcrypt_doit_error
         }
         tmp = insz;
 
     } else if(ctx->cipher == tomcrypt_enum_ocb3) {
         tmp = sizeof(tag);
         if(g_encrypt_mode) {
-            if(ocb3_encrypt_authenticate_memory(
+            if(error = ocb3_encrypt_authenticate_memory(
                 ctx->idx,
                 ctx->key, ctx->keysz,
                 ctx->nonce, ctx->noncelen,
                 ctx->header, ctx->headerlen,
                 in, insz,
                 out,
-                tag, &tmp)) goto quit;
+                tag, &tmp)) tomcrypt_doit_error
         } else {
-            if(ocb3_decrypt_verify_memory(
+            if(error = ocb3_decrypt_verify_memory(
                 ctx->idx,
                 ctx->key, ctx->keysz,
                 ctx->nonce, ctx->noncelen,
@@ -813,35 +855,35 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
                 in, insz,
                 out,
                 tag, tmp,
-                &stat)) goto quit;
+                &stat)) tomcrypt_doit_error
         }
         tmp = insz;
 
     } else if(ctx->cipher == tomcrypt_enum_ocb) {
         tmp = sizeof(tag);
         if(g_encrypt_mode) {
-            if(ocb_encrypt_authenticate_memory(
+            if(error = ocb_encrypt_authenticate_memory(
                 ctx->idx,
                 ctx->key, ctx->keysz,
                 ctx->nonce,
                 in, insz,
                 out,
-                tag, &tmp)) goto quit;
+                tag, &tmp)) tomcrypt_doit_error
         } else {
-            if(ocb_decrypt_verify_memory(
+            if(error = ocb_decrypt_verify_memory(
                 ctx->idx,
                 ctx->key, ctx->keysz,
                 ctx->nonce,
                 in, insz,
                 out,
                 tag, tmp,
-                &stat)) goto quit;
+                &stat)) tomcrypt_doit_error
         }
         tmp = insz;
 
     } else if(ctx->cipher == tomcrypt_enum_ccm) {
         tmp = sizeof(tag);
-        if(ccm_memory(
+        if(error = ccm_memory(
             ctx->idx,
             ctx->key, ctx->keysz,
             NULL, //uskey,
@@ -850,12 +892,12 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
             in, insz,
             out,
             tag, &tmp,
-            g_encrypt_mode ? CCM_ENCRYPT: CCM_DECRYPT)) goto quit;
+            g_encrypt_mode ? CCM_ENCRYPT: CCM_DECRYPT)) tomcrypt_doit_error
         tmp = insz;
 
     } else if(ctx->cipher == tomcrypt_enum_gcm) {
         tmp = sizeof(tag);
-        if(gcm_memory(
+        if(error = gcm_memory(
             ctx->idx,
             ctx->key, ctx->keysz,
             ctx->ivec, ctx->ivecsz,
@@ -863,33 +905,40 @@ TOMCRYPT *tomcrypt_doit(TOMCRYPT *ctx, u8 *type, u8 *in, int insz, u8 *out, int 
             in, insz,
             out,
             tag, &tmp,
-            g_encrypt_mode ? GCM_ENCRYPT: GCM_DECRYPT)) goto quit;
+            g_encrypt_mode ? GCM_ENCRYPT: GCM_DECRYPT)) tomcrypt_doit_error
         tmp = insz;
 
     } else if(ctx->cipher == tomcrypt_enum_pelican) {
-        if(pelican_memory(ctx->key, ctx->keysz, in, insz, out)) goto quit;
+        if(error = pelican_memory(ctx->key, ctx->keysz, in, insz, out)) tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_xcbc) {
-        if(xcbc_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) goto quit;
+        if(error = xcbc_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_f9) {
-        if(f9_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) goto quit;
+        if(error = f9_memory(ctx->idx, ctx->key, ctx->keysz, in, insz, out, &tmp)) tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_blake2smac) {
-        if(blake2smac_memory(ctx->key, ctx->keysz, in, insz, out, &tmp)) goto quit;
+        if(error = blake2smac_memory(ctx->key, ctx->keysz, in, insz, out, &tmp)) tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_blake2bmac) {
-        if(blake2bmac_memory(ctx->key, ctx->keysz, in, insz, out, &tmp)) goto quit;
+        if(error = blake2bmac_memory(ctx->key, ctx->keysz, in, insz, out, &tmp)) tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_poly1305) {
-        if(poly1305_memory(ctx->key, ctx->keysz, in, insz, out, &tmp)) goto quit;
+        if(error = poly1305_memory(ctx->key, ctx->keysz, in, insz, out, &tmp)) tomcrypt_doit_error
 
     } else if(ctx->cipher == tomcrypt_enum_chacha20poly1305) {
-        if(chacha20poly1305_memory(ctx->key, ctx->keysz, ctx->ivec, ctx->ivecsz, ctx->nonce, ctx->noncelen, in, insz, out, tag, &tmp, g_encrypt_mode ? GCM_ENCRYPT: GCM_DECRYPT)) goto quit;
+        if(error = chacha20poly1305_memory(ctx->key, ctx->keysz, ctx->ivec, ctx->ivecsz, ctx->nonce, ctx->noncelen, in, insz, out, tag, &tmp, g_encrypt_mode ? GCM_ENCRYPT: GCM_DECRYPT)) tomcrypt_doit_error
     }
     if(ret) *ret = tmp;
     return(ctx);
 quit:
+    if(try_again_counter == 1) {    // 0:ok, 1:retry, 2:giveup
+        if(ctx->keysz != keysz) {
+            ctx->keysz = keysz;
+            goto try_again;
+        }
+    }
+    fprintf(stderr, "Error: tomcrypt_doit error %d (%s:%d)\n", error, __FILE__, error_line);
     return NULL;
 }
 #endif
@@ -953,22 +1002,26 @@ void DO_QUICKBMS_HASH(u8 *INPUT, int INPUT_SIZE) {
 
 int do_quickbms_hmac(u8 *data, int datalen, u8 *digest) {
 #ifndef DISABLE_SSL
-    EVP_MD_CTX  *tmpctx;
+    EVP_MD_CTX  *tmpctx = NULL;
     i32     tmp = 0;
 
-    tmpctx = calloc(1, sizeof(EVP_MD_CTX));
-    if(!tmpctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
+    if(evpmd_ctx) {
+        tmpctx = calloc(1, sizeof(EVP_MD_CTX));
+        if(!tmpctx) STD_ERR(QUICKBMS_ERROR_MEMORY);
+    }
     if(hmac_ctx) {
         HMAC_Update(hmac_ctx, data, datalen);
-        EVP_MD_CTX_copy_ex(tmpctx, evpmd_ctx);
+        if(evpmd_ctx) EVP_MD_CTX_copy_ex(tmpctx, evpmd_ctx);
         HMAC_Final(hmac_ctx, digest, &tmp);
-    } else {
+    } else if(evpmd_ctx) {
         EVP_DigestUpdate(evpmd_ctx, data, datalen);
         EVP_MD_CTX_copy_ex(tmpctx, evpmd_ctx);
         EVP_DigestFinal(evpmd_ctx, digest, &tmp);
     }
-    FREE(evpmd_ctx);
-    evpmd_ctx = tmpctx;
+    if(evpmd_ctx) {
+        FREE(evpmd_ctx);
+        evpmd_ctx = tmpctx;
+    }
     DO_QUICKBMS_HASH(digest, tmp);
 #endif
     return 0;
@@ -1004,6 +1057,38 @@ int perform_encryption(u8 *data, int datalen) {
         else                datalen = wincrypt_encrypt(wincrypt_ctx, data, datalen);
 
 #ifndef DISABLE_SSL
+    } else QUICK_CRYPT_CASE(zip_aes_ctx)    // before evpmd_ctx, just in case of future updates
+
+        // Gladman
+        void fcrypt_encr_data(unsigned char *data, int d_len, aes_ctr_ctx_t *cx)
+        {   int i = 0, pos = cx->num;
+
+            while(i < d_len)
+            {
+                if(pos == AES_BLOCK_SIZE)
+                {   int j = 0;
+                    /* increment encryption nonce   */
+                    while(j < 8 && !++cx->ivec[j])
+                        ++j;
+                    /* encrypt the nonce to form next xor buffer    */
+                    AES_encrypt(cx->ivec, cx->ecount, &cx->ctx);
+                    pos = 0;
+                }
+
+                data[i++] ^= cx->ecount[pos++];
+            }
+
+            cx->num = pos;
+        }
+
+        if(!g_encrypt_mode) {
+            do_quickbms_hmac(data, datalen, digest);
+            fcrypt_encr_data(data, datalen, zip_aes_ctx);
+        } else {
+            fcrypt_encr_data(data, datalen, zip_aes_ctx);
+            do_quickbms_hmac(data, datalen, digest);
+        }
+
     } else QUICK_CRYPT_CASE(evp_ctx)
         if(g_reimport) {
             i = evp_ctx->encrypt;
@@ -1053,38 +1138,6 @@ int perform_encryption(u8 *data, int datalen) {
             }
             default: break;
         } 
-
-    } else QUICK_CRYPT_CASE(zip_aes_ctx)
-
-        // Gladman
-        void fcrypt_encr_data(unsigned char *data, int d_len, aes_ctr_ctx_t *cx)
-        {   int i = 0, pos = cx->num;
-
-            while(i < d_len)
-            {
-                if(pos == AES_BLOCK_SIZE)
-                {   int j = 0;
-                    /* increment encryption nonce   */
-                    while(j < 8 && !++cx->ivec[j])
-                        ++j;
-                    /* encrypt the nonce to form next xor buffer    */
-                    AES_encrypt(cx->ivec, cx->ecount, &cx->ctx);
-                    pos = 0;
-                }
-
-                data[i++] ^= cx->ecount[pos++];
-            }
-
-            cx->num = pos;
-        }
-
-        if(!g_encrypt_mode) {
-            fcrypt_encr_data(data, datalen, zip_aes_ctx);
-            do_quickbms_hmac(data, datalen, digest);
-        } else {
-            do_quickbms_hmac(data, datalen, digest);
-            fcrypt_encr_data(data, datalen, zip_aes_ctx);
-        }
 
     } else QUICK_CRYPT_CASE(modpow_ctx)
         u8      *bck_data = data,
@@ -1412,6 +1465,12 @@ int perform_encryption(u8 *data, int datalen) {
 
     } else QUICK_CRYPT_CASE(rc4_ctx)
         arc4_crypt(rc4_ctx, data, datalen);
+
+    } else QUICK_CRYPT_CASE(d3des_ctx)
+        ENCRYPT_BLOCKS(8, des((void *)data, (void *)data))
+
+    } else QUICK_CRYPT_CASE(chacha_ctx)
+        chacha20_encrypt(chacha_ctx, data, data, datalen);  // encrypt and decrypt are the same
 
     } else {
         if(datalen < 0) return -1;
@@ -1773,6 +1832,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(LZS) size = unlzs(in, zsize, out, size, 0);
         QUICK_COMP_CASE(LZS_BIG) size = unlzs(in, zsize, out, size, 1);
         QUICK_COMP_CASE(COPY) size = uncopy(in, zsize, out, size);  // this is never called because COMP_COPY is handled in dumpa() to avoid wasting two buffers
+        QUICK_COMP_CASE(COPY2) size = uncopy(in, zsize, out, size);
         QUICK_COMP_CASE(MOHLZSS) size = moh_lzss(in, zsize, out, size);
         QUICK_COMP_CASE(MOHRLE) size = moh_rle(in, zsize, out, size);
         QUICK_COMP_CASE(YAZ0) size = decodeYaz0(in, zsize, out, size);
@@ -2694,6 +2754,11 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(ULZ) size = ulz_decompress(in, zsize, out, size, 1);
         QUICK_COMP_CASE(SLZ_ROF) size = slz_rof(in, out, zsize, size);
         QUICK_COMP_CASE(LZ4X_NEW) size = lz4x_new(in, zsize, out, 0);
+        QUICK_COMP_CASE(SLZ_03b) SLZ3_Decode(in, out);  // no return value, trust size
+        QUICK_COMP_CASE(MPPC)       size = mppc_unpack(in, zsize, out, size, 0);
+        QUICK_COMP_CASE(MPPC_BIG)   size = mppc_unpack(in, zsize, out, size, 1);
+        QUICK_COMP_CASE(ALZSS) size = ALLZ_Decode(&out /*don't worry, doesn't get modified*/, in, zsize);
+        QUICK_COMP_CASE(CLZ) size = CLZ__unpack(in, zsize, out);
 
 
 
@@ -2821,7 +2886,7 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
             size = -1;
             if(snappy_compress(in, zsize, out, &size_t_tmp) == SNAPPY_OK) size = size_t_tmp;
         QUICK_COMP_CASE(ZPAQ_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = zpaq_compress(in, zsize, out, size);
-        QUICK_COMP_CASE(BLOSC_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(1024 /*???*/); size = blosclz_compress(9, in, zsize, out, size);
+        QUICK_COMP_CASE(BLOSC_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(1024 /*???*/); size = blosclz_compress(9, in, zsize, out, size, 0);
         QUICK_COMP_CASE(GIPFELI_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = gipfeli_compress(in, zsize, out, size);
         QUICK_COMP_CASE(YAPPY_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = yappy_compress(in, zsize, out, size, -1);
         QUICK_COMP_CASE(LZG_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = LZG_Encode(in, zsize, out, size, NULL);
@@ -2978,6 +3043,9 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
         QUICK_COMP_CASE(NCOMPRESS_COMPRESS)     QUICK_COMP_COMPRESS_DEFAULT(0); size = ncompress_main(in, zsize, out, size, 0);
         QUICK_COMP_CASE(UNCOMPRESS_COMPRESS)    QUICK_COMP_COMPRESS_DEFAULT(0); size = ncompress_main(in, zsize, out, size, 0); if(size > 3) mymemmove(out, out + 3, size -= 3);
         QUICK_COMP_CASE(LZ4X_NEW_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = lz4x_new(in, zsize, out, 1);
+        QUICK_COMP_CASE(DRAGONBALLZ_COMPRESS) QUICK_COMP_COMPRESS_DEFAULT(0); size = undragonballz_compress_fake(in, zsize, out);
+        QUICK_COMP_CASE(MPPC_COMPRESS)      size = mppc_pack(in, zsize, out, size, 0);
+        QUICK_COMP_CASE(MPPC_BIG_COMPRESS)  size = mppc_pack(in, zsize, out, size, 1);
 
         /*QUICK_COMP_CASE last break*/ break;
         default: {
@@ -3012,7 +3080,9 @@ int perform_compression(u8 *in, int zsize, u8 **ret_out, int size, int *outsize,
     if(*outsize == old_outsize) {   // the check is made on those algorithms that don't reallocate out
         if((u64)size > (u64)*outsize) {       // "limit" possible overflows with some unsafe algorithms (like sflcomp)
             fprintf(stderr, "\n"
-                "Error: the uncompressed data (%"PRId") is bigger than the allocated buffer (%"PRId")\n", size, *outsize);
+                "Error: the uncompressed data (%"PRId") is bigger than the allocated buffer (%"PRId")\n"
+                "       It usually means that data is not compressed or uses another algorithm\n",
+                size, *outsize);
             myexit(QUICKBMS_ERROR_COMPRESSION);
             size = -1;  // in case myexit() doesn't terminate, for example via ipc()
         }

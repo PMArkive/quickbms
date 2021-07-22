@@ -1,5 +1,5 @@
 /*
-    Copyright 2009-2018 Luigi Auriemma
+    Copyright 2009-2019 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -213,6 +213,9 @@ int add_datatype(u8 *str) {
         if(!stricmp(str, "xcore"))          return BMS_TYPE_ASM_XCORE;
         if(!stricmp(str, "powerpc"))        return BMS_TYPE_ASM_PPC;
         if(!stricmp(str, "powerpc64"))      return BMS_TYPE_ASM_PPC64;
+        if(!stricmp(str, "unicode32"))      return BMS_TYPE_UNICODE32;
+        if(!stricmp(str, "UTF-32"))         return BMS_TYPE_UNICODE32;
+        if(!stricmp(str, "UTF32"))          return BMS_TYPE_UNICODE32;
 
         // ever at the end!
         if(!stricmp(str, "unknown") || !stricmp(str, "?"))  return BMS_TYPE_UNKNOWN;
@@ -350,7 +353,7 @@ X5  array
     int     sub_idx; \
     var_check_idx(idx, __LINE__); \
     if(g_variable[idx].sub_var && g_variable[idx].sub_var->active) { \
-        sub_idx = check_sub_vars(idx, 0); \
+        sub_idx = check_sub_vars(idx, 1 /* yes it was 0 but this is the easiest way to fix any issue like "math VAR[i] = 123" or "if VAR[i] != 0" in a for() cycle */); \
         if(sub_idx < 0) { \
             fprintf(stderr, "\nError: the specified coordinates of the multidimensional array don't exist\n"); \
             myexit(QUICKBMS_ERROR_BMS); \
@@ -496,22 +499,39 @@ int var_is_a_constant_string(int idx) {
 
 
 
-void *get_var_ptr_cmd(int cmd, int cmd_idx, int parse_strings) {
+void *get_var_ptr_cmd(int idx, int cmd, int cmd_idx, int parse_strings, int *ret_size) {
     void    *ptr = NULL;
     int     n;
 
-    n = CMD.var[cmd_idx];
+    if(ret_size) *ret_size = 0;
+    n = (cmd_idx < 0) ? idx : CMD.var[cmd_idx];
     if(n < 0) {    // MEMORY_FILE
         n = -n;
         ptr = (void *)g_memory_file[n].data + g_memory_file[n].pos;
+        if(ret_size) {
+            *ret_size = g_memory_file[n].size - g_memory_file[n].pos;
+            if(*ret_size < 0) *ret_size = 0;
+        }
     } else {
         if(parse_strings && var_is_a_string(n)) {
             ptr = (void *)get_var(n);
+            if(ret_size) {
+                *ret_size = get_var_fullsz(n);
+                if(*ret_size < 0) *ret_size = 0;
+            }
         } else {
-            if(CMD.num[cmd_idx]) {    // &var / VARPTR
+            if((cmd_idx >= 0) && CMD.num[cmd_idx]) {    // &var / VARPTR
                 ptr = (void *)&g_variable[n].value32;
+                if(ret_size) *ret_size = sizeof(int);
             } else {
-                ptr = (void *)get_var32(n);
+                // return a negative value for numbers
+                if(g_variable[n].isnum < 0) {
+                    ptr = (void *)get_var32(n); // cannot return g_variable[n].float64;
+                    if(ret_size) *ret_size = -2;
+                } else {
+                    ptr = (void *)get_var32(n);
+                    if(ret_size) *ret_size = -1;
+                }
             }
         }
     }

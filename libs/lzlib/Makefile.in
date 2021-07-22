@@ -15,7 +15,7 @@ objs = carg_parser.o main.o
 .PHONY : all install install-bin install-info install-man \
          install-strip install-compress install-strip-compress \
          install-bin-strip install-info-compress install-man-compress \
-         install-as-lzip \
+         install-lib install-lib-strip uninstall-lib install-as-lzip \
          uninstall uninstall-bin uninstall-info uninstall-man \
          doc info man check dist clean distclean
 
@@ -78,12 +78,19 @@ Makefile : $(VPATH)/configure $(VPATH)/Makefile.in
 check : $(progname) bbexample lzcheck
 	@$(VPATH)/testsuite/check.sh $(VPATH)/testsuite $(pkgversion)
 
-install : install-bin install-info
-install-strip : install-bin-strip install-info
-install-compress : install-bin install-info-compress
-install-strip-compress : install-bin-strip install-info-compress
+install : install-lib install-info
+install-strip : install-lib-strip install-info
+install-compress : install-lib install-info-compress
+install-strip-compress : install-lib-strip install-info-compress
 
-install-bin : all
+install-bin : all install-man
+	if [ ! -d "$(DESTDIR)$(bindir)" ] ; then $(INSTALL_DIR) "$(DESTDIR)$(bindir)" ; fi
+	$(INSTALL_PROGRAM) ./$(progname_lzip) "$(DESTDIR)$(bindir)/$(progname)"
+
+install-bin-strip : all
+	$(MAKE) INSTALL_PROGRAM='$(INSTALL_PROGRAM) -s' install-bin
+
+install-lib : all
 	if [ ! -d "$(DESTDIR)$(includedir)" ] ; then $(INSTALL_DIR) "$(DESTDIR)$(includedir)" ; fi
 	if [ ! -d "$(DESTDIR)$(libdir)" ] ; then $(INSTALL_DIR) "$(DESTDIR)$(libdir)" ; fi
 	$(INSTALL_DATA) $(VPATH)/$(libname)lib.h "$(DESTDIR)$(includedir)/$(libname)lib.h"
@@ -104,8 +111,8 @@ install-bin : all
 	     [ -x "$(LDCONFIG)" ] ; then "$(LDCONFIG)" -n "$(DESTDIR)$(libdir)" || true ; fi ; \
 	fi
 
-install-bin-strip : all
-	$(MAKE) INSTALL_PROGRAM='$(INSTALL_PROGRAM) -s' install-bin
+install-lib-strip : all
+	$(MAKE) INSTALL_PROGRAM='$(INSTALL_PROGRAM) -s' install-lib
 
 install-info :
 	if [ ! -d "$(DESTDIR)$(infodir)" ] ; then $(INSTALL_DIR) "$(DESTDIR)$(infodir)" ; fi
@@ -126,16 +133,16 @@ install-man :
 install-man-compress : install-man
 	lzip -v -9 "$(DESTDIR)$(mandir)/man1/$(progname).1"
 
-install-as-lzip : install install-man
-	if [ ! -d "$(DESTDIR)$(bindir)" ] ; then $(INSTALL_DIR) "$(DESTDIR)$(bindir)" ; fi
-	$(INSTALL_PROGRAM) ./$(progname_lzip) "$(DESTDIR)$(bindir)/$(progname)"
+install-as-lzip : install-bin
 	-rm -f "$(DESTDIR)$(bindir)/lzip"
 	cd "$(DESTDIR)$(bindir)" && ln -s $(progname) lzip
 
-uninstall : uninstall-man uninstall-info uninstall-bin
+uninstall : uninstall-info uninstall-lib
 
-uninstall-bin :
+uninstall-bin : uninstall-man
 	-rm -f "$(DESTDIR)$(bindir)/$(progname)"
+
+uninstall-lib :
 	-rm -f "$(DESTDIR)$(includedir)/$(libname)lib.h"
 	-rm -f "$(DESTDIR)$(libdir)/lib$(libname).a"
 	-rm -f "$(DESTDIR)$(libdir)/lib$(libname).so"
@@ -171,8 +178,8 @@ dist : doc
 	  $(DISTNAME)/testsuite/check.sh \
 	  $(DISTNAME)/testsuite/test.txt \
 	  $(DISTNAME)/testsuite/test2.txt \
-	  $(DISTNAME)/testsuite/test.txt.lz \
-	  $(DISTNAME)/testsuite/test_sync.lz
+	  $(DISTNAME)/testsuite/test_sync.lz \
+	  $(DISTNAME)/testsuite/test.txt.lz
 	rm -f $(DISTNAME)
 	lzip -v -9 $(DISTNAME).tar
 

@@ -19,7 +19,7 @@ BEGIN
             VALUE "LegalCopyright", "Luigi Auriemma (GPLv2)"
             VALUE "ProductName", "QuickBMS"
             VALUE "ProductVersion", QUICKBMS_VER_STR
-            VALUE "Comments", "http://quickbms.aluigi.org"
+            VALUE "Comments", "http://quickbms.com"
             VALUE "InternalName", "QuickBMS"
             VALUE "OriginalFilename", "quickbms.exe"
         END
