@@ -1,0 +1,84 @@
+#######################################################################
+
+How to use the CRC calculation engine embedded in QuickBMS for
+calculating custom checksums
+
+#######################################################################
+
+QuickBMS >= 0.5.20b required:
+
+  http://quickbms.aluigi.org
+
+Use the following script saved as crc.bms or with any other name:
+
+  encryption CRC 0xEDB88320 "32 -1 -1 0 0 1"
+  get SIZE asize
+  log MEMORY_FILE 0 SIZE
+  print "%QUICKBMS_CRC|x%"
+
+Usage:
+  quickbms.exe crc.bms FILENAME
+
+The fields to modify for customizing the checksum engine are those in
+the first line after "CRC".
+
+The first number is the polynomial, for example 0xEDB88320 which is
+used to create the classical CRC32 table (the one with the second
+value equal to 0x77073096).
+
+The second string is composed by the following fields:
+
+- size of the crc in bits
+  8, 16, 32 or 64
+  note that 64bit checksums are supported only using quickbms_4gb_files.exe
+
+- initial value of the crc, usually 0 or -1 (~0)
+
+- value used to xor the crc at the end (0 or -1)
+  use 0 if there is no XOR to perform
+  use another value to perform the XOR, -1 means XOR 0xffffffff (~0)
+
+- type of crc calculation to perform:
+  0 = table[(data[i] ^ crc) & 0xff] ^ (crc >> 8)
+  1 = table[(data[i] ^ (crc >> (bits - 8))) & 0xff] ^ (crc << 8)
+  2 = ((crc << 8) | data[i]) ^ table[(crc >> (bits - 8)) & 0xff]
+  3 = ((crc >> 1) + ((crc & 1) << (bits - 1))) + data[i]
+  4 = IP checksum
+  5 = crc ^ data[i]
+  6 = crc + data[i]
+  7 = table[(data[i] ^ crc) & 0xff] ^ crc
+  8 = table[(data[i] ^ crc) & 0xff] ^ (crc >> (bits - 8))
+
+- reflection/reversed (0 or 1)
+  reflection means that encryption CRC 0xEDB88320 "32 -1 -1 0 0 1"
+  is the same of        encryption crc 0x04c11db7 "32 -1 -1 0 1 0"
+
+- bitmask side (0 or 1)
+  use 0 or -1 for considering the higher bit (AND 0x80000000)
+  use 1 for the lower bit (AND 1)
+  usually this value is referred to the reflection above
+
+
+For the default 16bit checksum (0xc0c1 as second value of the table)
+you can use:
+
+  encryption crc 0xa001 "16 0 0 0 0 1"
+
+For CRC64BitJones (0x7ad870c830358979):
+
+  encryption crc 0xad93d23594c935a9 "64 0 0 0 1 0"
+
+For classical 8bit XOR:
+
+  encryption crc 0 "8 0 0 5 0 0"
+
+and so on...
+
+If you need a CRC scanner take a look at this script:
+
+  http://aluigi.org/papers/bms/crc_scan.bms
+
+Any feedback or suggestion for additional features is appreciated.
+
+
+#######################################################################
